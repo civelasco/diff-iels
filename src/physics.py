@@ -1,3 +1,4 @@
+# %%
 import torch
 import torch.nn as nn
 import scipy
@@ -56,10 +57,10 @@ def interaction(params,alpha,tracking = False):
         else: 
             gouy_phase = 1.0
         scale_fact = (1+(zn/rayleigh)**2)**-1
-        e1 = electric1 * gouy_phase
+        e1 = electric1 #* gouy_phase
         # the amplitude of the laser 2 is defined such that both lasers have 
         # the same **power** 
-        e2 = electric1 * gouy_phase**-1 * (freq2/freq1)**0.5
+        e2 = electric1 * (freq2/freq1)**0.5 #* gouy_phase**-1
         e1c = e1.conj()
         e2c = e2.conj()
 
@@ -83,51 +84,52 @@ def interaction(params,alpha,tracking = False):
     # -------------------------------------------
     def segment_matrix(zn):
         acf,bcf = coupling_amplitudes(zn)
-        bsum = bcf[0,0]+bcf[1,1]+bcf[0,0].conj()+bcf[1,1].conj()
+        kron    = torch.kron # kronecker deltas to vectorize the filling of M
+        def shift(k):
+            s   = torch.zeros(L,L,dtype=torch.complex128)
+            idx = torch.arange(L-abs(k))
+            if k >= 0: s[idx+k,idx] = 1.0
+            else:      s[idx,idx-k] = 1.0
+            return s
+        S = {k: shift(k) for k in (-2,-1,0,1,2)}
+        I = S[0]
 
+        l = torch.arange(L,dtype=torch.float64)-lmax
+        l1,l2 = l[:,None],l[None,:]
+        # first, we fill the diagonal
+        bsum  = bcf[0,0]+bcf[1,1]+bcf[0,0].conj()+bcf[1,1].conj()
         vfac_m = (1/v-1/c_au)
         vfac_p = (1/v+1/c_au)
-        
-        M = torch.zeros(L,L,L,L,dtype=torch.complex128)
-        for i1 in range(L):
-            l1 = i1-lmax
-            for i2 in range(L):
-                l2 = i2-lmax
-                M[i1,i1,i2,i2] = (bsum+(vfac_m*l1*freq1+vfac_p*l2*freq2
-                                +(freq1*l1-freq2*l2)**2/(2*v*gm**3*c_au**2)))
-                if i1 > 0:
-                    if i2 > 0:
-                        M[i1,i1-1,i2,i2-1] = -acf[0,1]
-                    if i2 < L-1:
-                        M[i1,i1-1,i2,i2+1] = 2*bcf[0,1].conj()
-                if i1 < L-1:
-                    if i2 < L-1:
-                        M[i1,i1+1,i2,i2+1] = -acf[0,1].conj() 
-                    if i2 > 0:
-                        M[i1,i1+1,i2,i2-1] = 2*bcf[0,1]
-                
-                if i1 > 1:
-                    M[i1,i1-2,i2,i2] = -acf[0,0].conj()
-                if i2 > 1:    
-                    M[i1,i1,i2,i2-2] = -acf[1,1].conj()
-                if i1 < L-2:
-                    M[i1,i1+2,i2,i2] = -acf[0,0]
-                if i2 < L-2:
-                    M[i1,i1,i2,i2+2] = -acf[1,1]
+        Dvals = (bsum+vfac_m*l1*freq1+vfac_p*l2*freq2
+              +(freq1*l1-freq2*l2)**2/(2*v*gm**3*c_au**2)).to(torch.complex128)
+        M = torch.diag(Dvals.reshape(L*L))
+        M = M + (-acf[0,1])          *kron(S[-1], S[-1])
+        M = M + (2*bcf[0,1].conj())  *kron(S[-1], S[ 1])
+        M = M + (-acf[0,1].conj())   *kron(S[ 1], S[ 1])
+        M = M + (2*bcf[0,1])         *kron(S[ 1], S[-1])
+        M = M + (-acf[0,0].conj())   *kron(S[-2], I    )
+        M = M + (-acf[0,0])          *kron(S[ 2], I    )
+        M = M + (-acf[1,1].conj())   *kron(I    , S[-2])
+        M = M + (-acf[1,1])          *kron(I    , S[ 2])
         return M
     # -------------------------------------------
     alpha = alpha.reshape(L*L).to(torch.complex128)
     # tracking will be used when we want to generate the sideband probability
     # maps. Otherwise, no need to save this information
     if tracking:
-        alpha_i = torch.zeros((n_segments,L,L)
+        n_track = min(200,n_segments)
+        print(n_segments)
+        print(n_track)
+        interval_skip = int(n_segments/n_track)
+        alpha_i = torch.zeros((n_track,L,L)
                             ,dtype = torch.complex128)
     for n in range(n_segments):
         zn = (-interaction_distance * 0.5 + dz*n)
-        M  = segment_matrix(zn).permute(0,2,1,3).reshape(L*L,L*L)
+        M  = segment_matrix(zn)
         U  = torch.matrix_exp(-1j * M * dz)
         alpha = U @ alpha
-        if tracking:
+        if tracking and n%interval_skip == 0:
+            print(n)
             alpha_i[n] = alpha.reshape(L,L)
     alpha = alpha.reshape(L,L)
     return alpha_i if tracking else alpha
@@ -139,7 +141,7 @@ def free_propagation(params,alpha):
     freq2 = params.frequency2
     dw    = params.fr_diff
     zt    = params.talbot_distance
-    lmax  = params.lmax()
+    lmax  = params.lmax
     dist  = params.distance
     L     = params.L
     # Think about the propagation for the entire spectrum
@@ -152,7 +154,8 @@ def free_propagation(params,alpha):
 
 # =============================================================================
 class ElectronModulator(nn.Module):
-    def __init__(self,cfg,ke0,e0,dw0,d0=0):
+    def __init__(self,cfg,initial_kinetic,initial_field,
+                 initial_freq_diff,initial_prop_dist=0):
         # ke0  -> initial guess for the kinetic energy of the electron
         # e0   -> initial guess for the electric field amplitude
         # dw0  -> initial guess for the frequency difference     
@@ -161,8 +164,10 @@ class ElectronModulator(nn.Module):
         super().__init__()
         self.cfg = cfg
         # -- convert from the input units to atomic untis ---------------------
-        e0 = e0 * (eV_au/nm_au) ; dw0 = dw0 * eV_au 
-        ke0 = ke0 * eV_au       ; d0  = d0  * mm_au 
+        e0 = initial_field      * (eV_au/nm_au) 
+        dw0 = initial_freq_diff * eV_au
+        ke0 = initial_kinetic   * eV_au    
+        d0  = initial_prop_dist * mm_au
         # -- trainable parameters (stored in atomic units) --------------------
         self.electric = nn.Parameter(torch.as_tensor( e0,dtype=torch.float64))
         self.fr_diff  = nn.Parameter(torch.as_tensor(dw0,dtype=torch.float64))
@@ -175,7 +180,7 @@ class ElectronModulator(nn.Module):
             rayleigh0 = self._init_rayleigh()
             beta0 = self._init_beta(self.electric,self.kinetic)
             intdist0 = rayleigh0 * (beta0/self.cfg.beta_target)**0.5
-        self.lmax = max(5,int(2.0*beta0))
+        self.lmax = max(5,int(3.0*beta0))
         self.L    = 2*self.lmax + 1
         self.num_segments = max(1,int(10 * intdist0 / rayleigh0))
         self.interaction_distance = intdist0
