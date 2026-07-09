@@ -2,6 +2,7 @@
 import torch
 import torch.nn as nn
 import scipy
+import numpy as np
 from dataclasses import dataclass
 
 # building blocks to compute the evolution of a free electron interacting with
@@ -35,32 +36,30 @@ class Config:
     frequency1: torch.Tensor  # frequency of laser 1
     numerical_aperture: float # numerical aperture of the laser system
     beta_target: float        # maximum sideband order considered
+    points_per_rayleigh: int  # number of points used per Rayleigh range
     
 # -----------------------------------------------------------------------------
-def interaction(params,alpha,tracking = False):
+def interaction(params,alpha,tracking = False,use_gouy = False):
     # computes the interaction between the electron and the lasers
     v  = params.velocity
     gm = params.gamma
-    freq1 = params.cfg.frequency1
+    freq1 = params.frequency1
     freq2 = params.frequency2
     electric1 = params.electric
     rayleigh = params.rayleigh_range
     lmax = params.lmax
     L    = params.L
-    interaction_distance = params.interaction_distance
-    n_segments = params.num_segments
-    dz = params.dz
+    n_segments = len(params.z_mid)
     # -------------------------------------------
-    def coupling_amplitudes(zn,use_gouy = True):
-        if use_gouy:
-            gouy_phase = torch.exp(1j*torch.arctan(zn/rayleigh))
-        else: 
-            gouy_phase = 1.0
-        scale_fact = (1+(zn/rayleigh)**2)**-1
-        e1 = electric1 #* gouy_phase
+    def coupling_amplitudes():
+        # here we define the position independent coupling amplitudes A_ij
+        # and B_ij used for all segments. These amplitudes hold information 
+        # about how strong is the coupling between the electron and the laser
+        # light.
+        e1 = electric1
         # the amplitude of the laser 2 is defined such that both lasers have 
         # the same **power** 
-        e2 = electric1 * (freq2/freq1)**0.5 #* gouy_phase**-1
+        e2 = electric1 * (freq2/freq1)**0.5
         e1c = e1.conj()
         e2c = e2.conj()
 
@@ -70,7 +69,7 @@ def interaction(params,alpha,tracking = False):
         a21 = a12
         a_row1  = torch.stack((a11,a12))
         a_row2  = torch.stack((a21,a22))
-        a_coefs = torch.stack((a_row1,a_row2))*scale_fact
+        a_coefs = torch.stack((a_row1,a_row2))
 
         b11 = e1*e1c/(2*v*gm*freq1**2)
         b22 = e2*e2c/(2*v*gm*freq2**2)
@@ -78,12 +77,28 @@ def interaction(params,alpha,tracking = False):
         b21 = e2*e1c/(2*v*gm*freq1*freq2)
         b_row1  = torch.stack((b11,b12))
         b_row2  = torch.stack((b21,b22))
-        b_coefs = torch.stack((b_row1,b_row2))*scale_fact
+        b_coefs = torch.stack((b_row1,b_row2))
 
         return a_coefs,b_coefs
     # -------------------------------------------
-    def segment_matrix(zn):
-        acf,bcf = coupling_amplitudes(zn)
+    def segment_matrix(zn,amplitudes,use_gouy):
+        # we add the segment-dependent factors to the coefficients
+        # since we take z0 equal for both lasers, the Gouy phase only 
+        # influences terms which have (Ei * Ei) or (Ei * Ej^*) and cancels
+        # otherwise
+        
+        acf,bcf = amplitudes
+        scale_fact = (1+(zn/rayleigh)**2)**-1
+        if use_gouy:
+            gouy_phase = torch.exp(2j*torch.arctan(zn/rayleigh))
+        else:
+            gouy_phase = 1.0
+        a11 = acf[0,0] * scale_fact * gouy_phase
+        a22 = acf[1,1] * scale_fact / gouy_phase
+        a12 = acf[0,1] * scale_fact
+        b11 = bcf[0,0] * scale_fact
+        b22 = bcf[1,1] * scale_fact
+        b12 = bcf[0,1] * scale_fact * gouy_phase
         kron    = torch.kron # kronecker deltas to vectorize the filling of M
         def shift(k):
             s   = torch.zeros(L,L,dtype=torch.complex128)
@@ -97,39 +112,34 @@ def interaction(params,alpha,tracking = False):
         l = torch.arange(L,dtype=torch.float64)-lmax
         l1,l2 = l[:,None],l[None,:]
         # first, we fill the diagonal
-        bsum  = bcf[0,0]+bcf[1,1]+bcf[0,0].conj()+bcf[1,1].conj()
+        bsum  = b11+b22+b11.conj()+b22.conj()
         vfac_m = (1/v-1/c_au)
         vfac_p = (1/v+1/c_au)
         Dvals = (bsum+vfac_m*l1*freq1+vfac_p*l2*freq2
               +(freq1*l1-freq2*l2)**2/(2*v*gm**3*c_au**2)).to(torch.complex128)
         M = torch.diag(Dvals.reshape(L*L))
-        M = M + (-acf[0,1])          *kron(S[-1], S[-1])
-        M = M + (2*bcf[0,1].conj())  *kron(S[-1], S[ 1])
-        M = M + (-acf[0,1].conj())   *kron(S[ 1], S[ 1])
-        M = M + (2*bcf[0,1])         *kron(S[ 1], S[-1])
-        M = M + (-acf[0,0].conj())   *kron(S[-2], I    )
-        M = M + (-acf[0,0])          *kron(S[ 2], I    )
-        M = M + (-acf[1,1].conj())   *kron(I    , S[-2])
-        M = M + (-acf[1,1])          *kron(I    , S[ 2])
+        M = M + (-a12)          *kron(S[-1], S[-1])
+        M = M + (2*b12.conj())  *kron(S[-1], S[ 1])
+        M = M + (-a12.conj())   *kron(S[ 1], S[ 1])
+        M = M + (2*b12)         *kron(S[ 1], S[-1])
+        M = M + (-a11.conj())   *kron(S[-2], I    )
+        M = M + (-a11)          *kron(S[ 2], I    )
+        M = M + (-a22.conj())   *kron(I    , S[-2])
+        M = M + (-a22)          *kron(I    , S[ 2])
         return M
     # -------------------------------------------
     alpha = alpha.reshape(L*L).to(torch.complex128)
     # tracking will be used when we want to generate the sideband probability
     # maps. Otherwise, no need to save this information
     if tracking:
-        n_track = min(200,n_segments)
-        print(n_segments)
-        print(n_track)
-        interval_skip = int(n_segments/n_track)
-        alpha_i = torch.zeros((n_track,L,L)
-                            ,dtype = torch.complex128)
-    for n in range(n_segments):
-        zn = (-interaction_distance * 0.5 + dz*n)
-        M  = segment_matrix(zn)
-        U  = torch.matrix_exp(-1j * M * dz)
+        alpha_i = torch.zeros((n_segments,L,L)
+                              ,dtype = torch.complex128)
+    amplitudes = coupling_amplitudes()
+    for n,(zc,dzc) in enumerate(zip(params.z_mid,params.dz)):
+        M  = segment_matrix(zc,amplitudes,use_gouy=use_gouy)
+        U  = torch.matrix_exp(-1j * M * dzc)
         alpha = U @ alpha
-        if tracking and n%interval_skip == 0:
-            print(n)
+        if tracking:
             alpha_i[n] = alpha.reshape(L,L)
     alpha = alpha.reshape(L,L)
     return alpha_i if tracking else alpha
@@ -137,7 +147,7 @@ def interaction(params,alpha,tracking = False):
 # -----------------------------------------------------------------------------
 def free_propagation(params,alpha):
     v     = params.velocity
-    freq1 = params.cfg.frequency1
+    freq1 = params.frequency1
     freq2 = params.frequency2
     dw    = params.fr_diff
     zt    = params.talbot_distance
@@ -145,7 +155,6 @@ def free_propagation(params,alpha):
     dist  = params.distance
     L     = params.L
     # Think about the propagation for the entire spectrum
-    free_prop_mat = torch.zeros_like(alpha)
     l     = torch.arange(0,L,1)-lmax
     l1,l2 = l[:,None], l[None,:]
     argument = l1*freq1/v+l2*freq2/v+(2*pi/zt)*(l1*freq1+l2*freq2)**2*dw**-2
@@ -164,10 +173,11 @@ class ElectronModulator(nn.Module):
         super().__init__()
         self.cfg = cfg
         # -- convert from the input units to atomic untis ---------------------
-        e0 = initial_field      * (eV_au/nm_au) 
+        e0  = initial_field     * (eV_au/nm_au) 
         dw0 = initial_freq_diff * eV_au
         ke0 = initial_kinetic   * eV_au    
         d0  = initial_prop_dist * mm_au
+        self.frequency1 = self.cfg.frequency1*eV_au
         # -- trainable parameters (stored in atomic units) --------------------
         self.electric = nn.Parameter(torch.as_tensor( e0,dtype=torch.float64))
         self.fr_diff  = nn.Parameter(torch.as_tensor(dw0,dtype=torch.float64))
@@ -178,26 +188,48 @@ class ElectronModulator(nn.Module):
         # are not differentiable (and thus should not influence gradients)
         with torch.no_grad():
             rayleigh0 = self._init_rayleigh()
-            beta0 = self._init_beta(self.electric,self.kinetic)
-            intdist0 = rayleigh0 * (beta0/self.cfg.beta_target)**0.5
-        self.lmax = max(5,int(3.0*beta0))
-        self.L    = 2*self.lmax + 1
-        self.num_segments = max(1,int(10 * intdist0 / rayleigh0))
+            beta0     = self._init_beta(self.electric,self.kinetic)
+            intdist0  = rayleigh0 * (beta0/self.cfg.beta_target)**0.5
+        self._beta0_init = float(beta0)
+        self.lmax     = max(5,int(2.5*beta0))
+        self.L        = 2*self.lmax + 1
         self.interaction_distance = intdist0
-        self.dz   = self.interaction_distance / self.num_segments
+        # taking a linear sampling of the interaction region takes too many 
+        # steps unitl convergence. To fix this, we take a tan sampling, where
+        # zn = zR * tan(fn) which is natural given the position dependence of 
+        # the interaction matrix (1+(z0/zR)**2) = sec(fn)**2 and trivially so 
+        # for the Gouy phase
+        theta_max  = torch.arctan(intdist0 / (2*rayleigh0)).item()
+        pts_per_zR = self.cfg.points_per_rayleigh
+        self.num_segments = max(8,int(2*theta_max*pts_per_zR))
+        theta      = torch.linspace(-theta_max,theta_max,self.num_segments+1
+                                    ,dtype = torch.float64)
+        z_edges    = rayleigh0*torch.tan(theta)
+        # we use the mid-point rule, with the interaction amplitude calculated 
+        # at the middle of each segment
+        self.z_mid = 0.5 * (z_edges[:-1] + z_edges[1:])
+        self.dz = z_edges[1:] - z_edges[:-1]
 
     # - these compute from explicit arguments (init will call them w/no grad) -
     @staticmethod
     def _init_velocity(kinetic):
         return c_au * (1-(kinetic/c_au**2+1)**-2.0)**0.5
     def _init_rayleigh(self):
-        return 2*c_au / (self.cfg.frequency1 * self.cfg.numerical_aperture**2)
+        return 2*c_au / (self.frequency1 * self.cfg.numerical_aperture**2)
     def _init_beta(self,electric,kinetic):
         v   = self._init_velocity(kinetic)
         gm  = (1-(v/c_au)**2.0)**-0.5
-        ray = 2*c_au / (self.cfg.frequency1 * self.cfg.numerical_aperture**2)
-        return abs(electric**2.0 * ray/(2*v*gm*self.cfg.frequency1**2))
+        ray = 2*c_au / (self.frequency1 * self.cfg.numerical_aperture**2)
+        return abs(electric**2.0 * ray/(2*v*gm*self.frequency1**2))
 
+    @staticmethod
+    def edge_leakage(alpha):
+        # this function tells what fraction of the population is living at the 
+        # sidebands, if this is larger than 0.1, it is very possible we have
+        # saturated lmax for the given beta. 
+        p = torch.abs(alpha)**2
+        edge = p[0,:].sum()+p[-1,:].sum()+p[:,0].sum()+p[:,-1].sum()
+        return (edge/p.sum()).item()    
     # - live derived quantities (smoot functions of params, admit gradient) ---
     # electron velocity, depends on kinetic energy
     @property 
@@ -207,12 +239,12 @@ class ElectronModulator(nn.Module):
     def gamma(self): return (1-(self.velocity/c_au)**2.0)**-0.5
     # frequency of the laser beam 2, derived from frequency1 and fr_diff
     @property
-    def frequency2(self): return self.cfg.frequency1 + self.fr_diff
+    def frequency2(self): return self.frequency1 + self.fr_diff
     # Rayleigh Range: distance near the foucs where the laser beam is 
     # considered focused
     @property
     def rayleigh_range(self): return (2*c_au
-                        /(self.cfg.frequency1*self.cfg.numerical_aperture**2))
+                        /(self.frequency1*self.cfg.numerical_aperture**2))
     # Talbot distance, sets the periodicity of the free-propagation compression
     @property
     def talbot_distance(self): return (4*pi*self.velocity**3*self.gamma**3
@@ -222,3 +254,35 @@ class ElectronModulator(nn.Module):
         alpha = free_propagation(self,alpha)
         return alpha
 # =============================================================================
+
+# %% 
+# =============================================================================
+# --- GRADIENT TEST  ----------------------------------------------------------
+# testing that the graph is connected and tracking the gradient for one run
+# we also test the spilling test to check everything works
+
+if __name__ == "__main__":
+    cfg = Config(frequency1=1.0, numerical_aperture=0.2,
+                 beta_target=1e-3, points_per_rayleigh=8)
+    m = ElectronModulator(cfg, initial_kinetic=30e3, initial_field=1.0,
+                          initial_freq_diff=1.0*(0.5-1), initial_prop_dist=1.0)
+    print(f"L = {m.L}   segments = {len(m.z_mid)}   "
+        f"intdist/zR = {(m.interaction_distance/m.rayleigh_range).item():.1f}")
+ 
+    alpha0 = torch.zeros((m.L,m.L),dtype=torch.complex128)
+    alpha0[m.lmax,m.lmax] = 1.0
+ 
+    out = m(alpha0)
+    # not our measure of compression, but good enough to test the gradients
+    w    = (torch.arange(m.L,dtype=torch.float64)-m.lmax).abs()
+    loss = (torch.abs(out)**2 * (w[:,None]+w[None,:])).sum()
+    loss.backward()
+ 
+    print(f"loss = {loss.item():.6e}")
+    for name,p in m.named_parameters():
+        g = "None" if p.grad is None else f"{p.grad.item():.3e}"
+        finite = (p.grad is not None) and torch.isfinite(p.grad).all().item()
+        print(f"  grad {name:9s} = {g:>12s}   finite={finite}")
+    print(f"edge leakage = {m.edge_leakage(out):.2e}   ")
+
+# %%
