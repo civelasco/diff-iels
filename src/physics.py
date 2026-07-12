@@ -273,7 +273,7 @@ class ElectronModulator(nn.Module):
             beta0     = self._init_beta(self.electric,self.kinetic)
             intdist0  = rayleigh0 * (beta0/self.cfg.beta_target)**0.5
         self._beta0_init = float(beta0)
-        self.lmax     = max(5,int(2.5*beta0))
+        self.lmax     = max(5,int(3*beta0))
         self.L        = 2*self.lmax + 1
         self.interaction_distance = intdist0
         # taking a linear sampling of the interaction region takes too many 
