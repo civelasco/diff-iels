@@ -1,19 +1,52 @@
-# %%
+"""
+===============================================================================
+This code is based on Free-Space Optical Modulation of Free Electrons in the 
+Continuous-Wave Regime by C.I. Velasco and F.J. García de Abajo, PRL 134 
+123804 (2025).
+===============================================================================
+ 
+Here, we compute the evolution of a free electron that interacts with two
+counter-propagating laser beams and its subsequent free-space propagation. 
+ 
+The lasers are modeled as gaussian beams and we consider the electron is 
+traveling along their optical axis. Each beam is characterized by their 
+frequencies w1 and w2, the electric field amplitudes E1 and E2, and the 
+numerical aperture of the optical system NA, which fixes the rayleigh range 
+(zR), i.e. the distance in which the lasers are focused and their amplitudes 
+are more intense. Besides the amplitude, each gaussian beam has an associated 
+Gouy phase exp(i arctan(z/zR)), which adds a "momentum kick" that also 
+affects the interaction probability between the electron and the lasers.
+ 
+The electron is characterized by a kinetic energy distribution tightly 
+centered around an average value Ke0, the spread is much smaller than the 
+photon energies hbar(w1,w2). (so we consider a point-like distribution in 
+energy space). 
+ 
+The evolution comes in two steps, first we modulate the energy during the 
+interaction of the electron with the laser beams, and then the electron is
+spatially modulated by the interaction.
+ 
+Numerically, the electron state is a 2D array of complex amplitudes 
+alpha[l1,l2], where l1 and l2 the emitted (l1,l2 < 0) or absorbed (l1,l2 > 0)
+photons with lasers 1 and 2 (energy shift is l1*hbar*w1 + l2*hbar*w2), 
+truncated at |l1|,|l2| <= lmax (set by a coupling strenght that depends on 
+interaction parameters). The interaction is integrated by slicing the optical 
+axis into segments and applying a matrix_exp(-i M(z) dz) to alpha on each 
+segment. Free propagation is instead a element-by-element multiplication by 
+the Talbot phase.  
+
+The module is a differentiable PyTorch nn.Module: the physical inputs (field
+amplitudes, frequency difference, electron kinetic energy and final 
+propagation distance) are trainable parameters, so that temporal compression 
+of the electron pulse in a single optical period 2*pi*c/|w1-w2| can be 
+optimized by gradient descent through the full evolution.  
+===============================================================================
+"""
 import torch
 import torch.nn as nn
 import scipy
 import numpy as np
 from dataclasses import dataclass
-
-# building blocks to compute the evolution of a free electron interacting with
-# two counter-propagating laser beams of frequencies w1 and w2, electric field 
-# amplitudes e1 and e2. The electron has an initial kinetic energy kinetic with 
-# the energy spread being much smaller than w1-w2.
-# The evolution comes in two steps, first we modulate the energy during the 
-# interaction of the electron with the laser beams, and then the electron is
-# spatially modulated by the interaction.
-
-
 # We use atomic units (electron charge = electron mass = hbar = 1.0) but we 
 # expect the input to be using different system of units
 # we define basic physical and mathematical constants we use along the code
@@ -40,7 +73,28 @@ class Config:
     
 # -----------------------------------------------------------------------------
 def interaction(params,alpha,tracking = False,use_gouy = False):
-    # computes the interaction between the electron and the lasers
+    """Propagate the electron energy-state amplitudes through the two laser
+       beam interaction.
+    
+    Parameters 
+    ----------
+    params: ElectronModulator -> gives the physical quantities (velocity, 
+    gamma, frequencies, field, rayleigh_range) and the frozen grid (z_mid, dz, 
+    lmax, L). 
+    alpha: (L,L) complex128 tensor -> sideband amplitudes. |alpha[i,j]|^2 is 
+           the probability that the electron exchanged l1 = i-lmax photons with
+           beam 1 and l2 = j - lmax with beam 2. alpha[lmax,lmax] corresponds 
+           to the ZLP. The amplitude is normalized to sum |alpha|**2 = 1.
+    tracking: bool -> if True, returns the state after every segment
+    use_gouy: bool -> includes the Gouy phase that dramatically modifies the 
+              interaction
+
+    Returns
+    -------
+    (L, L) complex128 -> if tracking is False (final state)
+    (n_segments, L, L) complex128 -> if tracking True (per-segment trajectory)
+    """
+
     v  = params.velocity
     gm = params.gamma
     freq1 = params.frequency1
@@ -82,10 +136,12 @@ def interaction(params,alpha,tracking = False,use_gouy = False):
         return a_coefs,b_coefs
     # -------------------------------------------
     def segment_matrix(zn,amplitudes,use_gouy):
-        # we add the segment-dependent factors to the coefficients
-        # since we take z0 equal for both lasers, the Gouy phase only 
-        # influences terms which have (Ei * Ei) or (Ei * Ej^*) and cancels
-        # otherwise
+        """
+        we add the segment-dependent factors to the coefficients
+        since we take z0 equal for both lasers, the Gouy phase only 
+        influences terms which have (Ei * Ei) or (Ei * Ej^*) and cancels
+        otherwise
+        """
         
         acf,bcf = amplitudes
         scale_fact = (1+(zn/rayleigh)**2)**-1
@@ -146,6 +202,32 @@ def interaction(params,alpha,tracking = False,use_gouy = False):
 
 # -----------------------------------------------------------------------------
 def free_propagation(params,alpha):
+    """Apply the free-space Talbot phase to the sideband amplitudes.
+
+    Pure phase, applied elementwise (no mixing between sidebands): each 
+    alpha[i,j] is multiplied by exp(i * phi_{l1,l2} * distance), where 
+    l1 = i - lmax, l2 = j - lmax, and 
+       phi = (l1 w1 + l2 w2)/v + (l1 w1 + l2 w2)^2 / (2 v^3 gamma^3)
+    
+    The quadratic (compression) term is written via the Talbot distance zt as 
+    (2 pi / zt)(...)^2 / dw^2; note zt ~ 1/dw^2, so dw cancels and the term is 
+    independent of the frequency difference.
+
+    Parameters
+    ----------
+    params: ElectronModulator 
+       Supplies velocity, frequencies, talbot_distance, distance, lmax, L
+    alpha: (L, L) complex128 tensor
+       Sideband amplitudes (same convention as interaction).
+    
+    Returns
+    -------
+    (L, L) complex128 tensor
+       Amplitudes after propagating params.distance. |alpha|^2 is unchanged 
+       (energy populations are conserved, only relative phases evolve).
+    """
+
+
     v     = params.velocity
     freq1 = params.frequency1
     freq2 = params.frequency2
@@ -210,6 +292,12 @@ class ElectronModulator(nn.Module):
         self.z_mid = 0.5 * (z_edges[:-1] + z_edges[1:])
         self.dz = z_edges[1:] - z_edges[:-1]
 
+    def __repr__(self): 
+        return (f"ElectronModulator(L={self.L}, segments={len(self.z_mid)},"
+        f"beta0={self._beta0_init:.2f}, v/c={(self.velocity/c_au).item():.3f},"
+        f"intdist/zR = {(self.interaction_distance/
+                         self.rayleigh_range).item():.1f}")
+
     # - these compute from explicit arguments (init will call them w/no grad) -
     @staticmethod
     def _init_velocity(kinetic):
@@ -253,9 +341,7 @@ class ElectronModulator(nn.Module):
         alpha = interaction(self,alpha)
         alpha = free_propagation(self,alpha)
         return alpha
-# =============================================================================
 
-# %% 
 # =============================================================================
 # --- GRADIENT TEST  ----------------------------------------------------------
 # testing that the graph is connected and tracking the gradient for one run
@@ -284,5 +370,3 @@ if __name__ == "__main__":
         finite = (p.grad is not None) and torch.isfinite(p.grad).all().item()
         print(f"  grad {name:9s} = {g:>12s}   finite={finite}")
     print(f"edge leakage = {m.edge_leakage(out):.2e}   ")
-
-# %%
