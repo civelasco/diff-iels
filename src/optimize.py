@@ -23,10 +23,9 @@ from metric import degree_of_coherence
 
 eV_au = (scipy.constants.physical_constants['electron volt-joule relationship'][0]
        / scipy.constants.physical_constants['atomic unit of energy'][0] )
-
 mm_au = 1/(scipy.constants.physical_constants['atomic unit of length'][0]*1e3)
-
 nm_au = 1/(scipy.constants.physical_constants['atomic unit of length'][0]*1e9)
+c_au = scipy.constants.physical_constants['inverse fine-structure constant'][0]
 
 def optimize(model, steps, learning_rate, order=1):
     opt = torch.optim.Adam(model.parameters(),lr=learning_rate)
@@ -44,10 +43,6 @@ def optimize(model, steps, learning_rate, order=1):
         loss.backward()
         opt.step()
         with torch.no_grad():
-            # we set limits to some parameters so they do not escape the 
-            # physics-based bounds (kinetic > 0) and (w2 > w1 so fr_diff < 0).
-            model.kinetic.clamp_(min = 1.0*eV_au)
-            model.fr_diff.clamp_(max = -1e-5*eV_au)
             leak = model.edge_leakage(alpha)
         if leak > 1e-2:
             warnings.warn(f"edge leakage {leak:.1e} at step {step}")
@@ -58,3 +53,54 @@ def optimize(model, steps, learning_rate, order=1):
                         ,model.distance.item()/mm_au))
     return history
 
+"""
+---------------------- Single value opimization test --------------------------
+We try out the optimizer by taking the free-propagation distance as the one 
+parameter to optimize. We contrast the obtained result of the DOC_1 with the 
+analytical PINEM maximum of DOC_1 ~ 0.34.
+"""
+if __name__ == '__main__':
+    from physics import Config,ElectronModulator
+    import matplotlib.pyplot as plt
+    import numpy as np
+    freq1    = 1.0
+    numap    = 0.2
+    beta_tgt = 1e-3
+    pts_p_rl = 64
+    kinetic  = 30e3
+    field    = 0.2
+    freq_dif = -0.5
+
+    cfg = Config(freq1,numap,beta_tgt,pts_p_rl)
+    m   = ElectronModulator(cfg,kinetic,field,freq_dif,0.0)
+
+    def freeze_all_but_distance(model):
+        for name, p in model.named_parameters():
+            p.requires_grad_(name == 'log_distance')
+    print(f'zT/zR = {(m.talbot_distance/m.rayleigh_range):.2f} \n',
+        f'lmax  = {m.lmax} \n',
+        f'v/c   = {(m.velocity/c_au):.3f}\n'
+        f'initial value distance: {(m.distance/mm_au):.3f} mm')
+    freeze_all_but_distance(m)
+    steps = 150
+    lr    = 5e-3
+    alpha0 = torch.zeros((m.L,m.L),dtype=torch.complex128)
+    alpha0[m.lmax,m.lmax] = 1.0
+    print(f'initial DOC_1 before optimization: {degree_of_coherence(m,m(alpha0),1):.3f}')
+
+    hist = optimize(m,steps,lr,1)
+    print(f'final DOC_1 after optimization: {hist[-1][1]:.3f}')
+    print(f'optimum analytical PINEM limit   : {0.34}')
+
+    doc_hist = np.zeros(len(hist))
+    for i in range(len(doc_hist)):
+        doc_hist[i] = hist[i][1]
+    plt.plot(doc_hist,label = 'optimization')
+    plt.plot([0,steps],[0.34,0.34],color='k',linestyle='--'
+            ,label='analytical limit (non-recoil)')
+    plt.legend()
+    plt.ylabel('DOC1')
+    plt.xlabel('training steps')
+    plt.title('single-parameter training run (non-recoil regime)\n' 
+                + f'--parameter: free-propagation distance, lr = {lr}--')
+    plt.show()

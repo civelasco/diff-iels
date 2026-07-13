@@ -260,11 +260,23 @@ class ElectronModulator(nn.Module):
         ke0 = initial_kinetic   * eV_au    
         d0  = initial_prop_dist * mm_au
         self.frequency1 = self.cfg.frequency1*eV_au
-        # -- trainable parameters (stored in atomic units) --------------------
-        self.electric = nn.Parameter(torch.as_tensor( e0,dtype=torch.float64))
-        self.fr_diff  = nn.Parameter(torch.as_tensor(dw0,dtype=torch.float64))
-        self.kinetic  = nn.Parameter(torch.as_tensor(ke0,dtype=torch.float64))
-        self.distance = nn.Parameter(torch.as_tensor( d0,dtype=torch.float64))
+        # -- trainable parameters  --------------------------------------------
+        # the parameters in atomic units are very different in magnitude, so 
+        # we use the inputs as a frozen scale and optimize a quantity in log 
+        # scale, that remians O(1) with reasonable learning rates.
+        # we are missing our fourth trainable parameter: the free-propagation 
+        # distance, which we introduce later after defining a few quantities
+        self.register_buffer('electric_scale'
+                             ,torch.as_tensor(e0,dtype=torch.float64))
+        self.register_buffer('fr_diff_scale'
+                             ,torch.as_tensor(abs(dw0),dtype=torch.float64))
+        self.register_buffer('kinetic_scale'
+                             ,torch.as_tensor(ke0,dtype=torch.float64))
+        
+        self.log_electric = nn.Parameter(torch.zeros((),dtype=torch.float64))
+        self.log_fr_diff  = nn.Parameter(torch.zeros((),dtype=torch.float64))
+        self.log_kinetic  = nn.Parameter(torch.zeros((),dtype=torch.float64))
+        self.log_distance = nn.Parameter(torch.zeros((),dtype=torch.float64))        
         # -- discretization parameters (FROZEN): computed once from initial 
         # params, not again. These set the shapes of the tensors used so they
         # are not differentiable (and thus should not influence gradients)
@@ -291,6 +303,16 @@ class ElectronModulator(nn.Module):
         # at the middle of each segment
         self.z_mid = 0.5 * (z_edges[:-1] + z_edges[1:])
         self.dz = z_edges[1:] - z_edges[:-1]
+
+        # -- trainable parameter (free-propagation distance) ------------------
+        # this distance is being set at 0.0 by default (the specific values it 
+        # will usually take depend strongly on the Talbot distance), but the 
+        # log-scale values rely on a scale that cannot be 0.0, so we instead 
+        # build a safe initial guess in terms of z_T.
+        with torch.no_grad():
+            dist_scale = d0 if d0 != 0.0 else 0.25*self.talbot_distance.item()
+        self.register_buffer('distance_scale'
+                             ,torch.as_tensor(dist_scale,dtype = torch.float64))
 
     def __repr__(self): 
         return (f"ElectronModulator(L={self.L}, segments={len(self.z_mid)},"
@@ -320,6 +342,16 @@ class ElectronModulator(nn.Module):
         p = torch.abs(alpha)**2
         edge = p[0,:].sum()+p[-1,:].sum()+p[:,0].sum()+p[:,-1].sum()
         return (edge/p.sum()).item()    
+    
+    # --- conversion of the trainable physical parameters into linear-scale ---
+    @property
+    def electric(self): return self.electric_scale*torch.exp(self.log_electric)
+    @property
+    def fr_diff(self): return -self.fr_diff_scale*torch.exp(self.log_fr_diff)
+    @property
+    def kinetic(self): return self.kinetic_scale*torch.exp(self.log_kinetic)
+    @property
+    def distance(self): return self.distance_scale*torch.exp(self.log_distance)
     # - live derived quantities (smoot functions of params, admit gradient) ---
     # electron velocity, depends on kinetic energy
     @property 
@@ -352,8 +384,8 @@ class ElectronModulator(nn.Module):
 if __name__ == "__main__":
     cfg = Config(frequency1=1.0, numerical_aperture=0.2,
                  beta_target=1e-3, points_per_rayleigh=8)
-    m = ElectronModulator(cfg, initial_kinetic=30e3, initial_field=1.0,
-                          initial_freq_diff=1.0*(0.5-1), initial_prop_dist=1.0)
+    m = ElectronModulator(cfg, initial_kinetic=30e3, initial_field=0.25,
+                          initial_freq_diff=1.0*(0.5-1), initial_prop_dist=0.0)
     print(f"L = {m.L}   segments = {len(m.z_mid)}   "
         f"intdist/zR = {(m.interaction_distance/m.rayleigh_range).item():.1f}")
  
