@@ -246,7 +246,7 @@ def free_propagation(params,alpha):
 # =============================================================================
 class ElectronModulator(nn.Module):
     def __init__(self,cfg,initial_kinetic,initial_field,
-                 initial_freq_diff,initial_prop_dist=0):
+                 initial_freq_diff,initial_prop_dist):
         # ke0  -> initial guess for the kinetic energy of the electron
         # e0   -> initial guess for the electric field amplitude
         # dw0  -> initial guess for the frequency difference     
@@ -307,7 +307,7 @@ class ElectronModulator(nn.Module):
     def _init_beta(self,electric1,kinetic):
         v   = self._init_velocity(kinetic)
         gm  = (1-(v/c_au)**2.0)**-0.5
-        electric2 = electric1 * (self.frequency2/self.frequency2)**0.5
+        electric2 = electric1 * (self.frequency2/self.frequency1)**0.5
         eleprod = electric1 * electric2
         b12 = eleprod / (2 * v * gm * self.frequency1 * self.frequency2) 
         return abs(2 * b12 * pi * self.rayleigh_range)

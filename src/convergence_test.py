@@ -25,7 +25,7 @@ from metric import degree_of_coherence
 freq1_init   = 1.0
 num_apt_init = 0.2
 kinetic_init = 30e3
-field_init   = 0.2
+field_init   = 0.3
 # phase matched so the interaction is maximized
 diff_init    = freq1_init*(0.5-1.0) 
 order        = 1  # DOC order to converge (the one we optimize)
