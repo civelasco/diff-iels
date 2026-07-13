@@ -11,7 +11,7 @@ Convergence test for the tan-sampled interaction module in physics.py.
   optimize. "Converged" means the objective stops changing as we refine 
   -> we look for a *first plateau* in DOC, not the smallest change.
 """
-# %%
+
 import time
 import numpy as np
 import torch
@@ -25,7 +25,7 @@ from metric import degree_of_coherence
 freq1_init   = 1.0
 num_apt_init = 0.2
 kinetic_init = 30e3
-field_init   = 0.75
+field_init   = 0.2
 # phase matched so the interaction is maximized
 diff_init    = freq1_init*(0.5-1.0) 
 order        = 1  # DOC order to converge (the one we optimize)
@@ -41,7 +41,7 @@ prop_dist_mm = (m0.talbot_distance/6).item() / mm_au
 # -----------------------------------------------------------------------------
 # fixed tolerance for convergence (absolute change in DOC_m)
 # -----------------------------------------------------------------------------
-tolerance = 1e-2   # converged when |dDOC| < tolerance
+tolerance = 1e-3 # converged when |dDOC| < tolerance
 
 # no gradients needed for a convergence test
 torch.set_grad_enabled(False)
@@ -91,25 +91,20 @@ def sweep_test(name, knob_name, knob_values, make_cfg):
         print(f"-> no plateau below {tolerance:.0e} in this range")
     return results, deltas
 
-# -----------------------------------------------------------------------------
-# Point density sweep -- do this first to know where to fix pts for the extent
-# sweep
-# -----------------------------------------------------------------------------
-betamax_fixed  = 1e-4
-density_values = [4, 8, 16, 32, 64, 128, 256, 512]
-dens_res, dens_delt = sweep_test(
-    f"Point density (beta_target = {betamax_fixed:.0e}) fixed",
-    "points_per_rayleigh", density_values,
-    make_cfg = lambda k: (betamax_fixed, k))
 
-# -----------------------------------------------------------------------------
-# Interaction extent sweep -- fix the density on the plateau found above
-# -----------------------------------------------------------------------------
-betamax_values = [1e-1, 3e-2, 1e-2, 3e-3, 1e-3, 3e-4, 1e-4]
-density_fixed  = 256
-beta_res, beta_delt = sweep_test(
-    f"Interaction extent (points_per_rayleigh = {density_fixed}) fixed",
-    "beta_target", betamax_values,
-    make_cfg = lambda bt: (bt, density_fixed))
+if __name__ == "__main__":
+    # point density sweep
+    betamax_fixed  = 1e-3
+    density_values = [4, 8, 16, 32, 64, 128, 256]
+    dens_res, dens_delt = sweep_test(
+        f"Point density (beta_target = {betamax_fixed:.0e}) fixed",
+        "points_per_rayleigh", density_values,
+        make_cfg = lambda k: (betamax_fixed, k))
 
-# %%
+    # extent sweep
+    betamax_values = [1e-1, 3e-2, 1e-2, 3e-3, 1e-3, 3e-4, 1e-4]
+    density_fixed  = 64
+    beta_res, beta_delt = sweep_test(
+        f"Interaction extent (points_per_rayleigh = {density_fixed}) fixed",
+        "beta_target", betamax_values,
+        make_cfg = lambda bt: (bt, density_fixed))

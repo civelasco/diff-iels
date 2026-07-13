@@ -304,11 +304,13 @@ class ElectronModulator(nn.Module):
         return c_au * (1-(kinetic/c_au**2+1)**-2.0)**0.5
     def _init_rayleigh(self):
         return 2*c_au / (self.frequency1 * self.cfg.numerical_aperture**2)
-    def _init_beta(self,electric,kinetic):
+    def _init_beta(self,electric1,kinetic):
         v   = self._init_velocity(kinetic)
         gm  = (1-(v/c_au)**2.0)**-0.5
-        ray = 2*c_au / (self.frequency1 * self.cfg.numerical_aperture**2)
-        return abs(electric**2.0 * ray/(2*v*gm*self.frequency1**2))
+        electric2 = electric1 * (self.frequency2/self.frequency2)**0.5
+        eleprod = electric1 * electric2
+        b12 = eleprod / (2 * v * gm * self.frequency1 * self.frequency2) 
+        return abs(2 * b12 * pi * self.rayleigh_range)
 
     @staticmethod
     def edge_leakage(alpha):
