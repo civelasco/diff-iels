@@ -246,7 +246,7 @@ def free_propagation(params,alpha):
 # =============================================================================
 class ElectronModulator(nn.Module):
     def __init__(self,cfg,initial_kinetic,initial_field,
-                 initial_freq_diff,initial_prop_dist):
+                 initial_freq_diff,initial_prop_dist,use_gouy=False):
         # ke0  -> initial guess for the kinetic energy of the electron
         # e0   -> initial guess for the electric field amplitude
         # dw0  -> initial guess for the frequency difference     
@@ -254,6 +254,7 @@ class ElectronModulator(nn.Module):
         # the parameters placed here are the ones to be optimized
         super().__init__()
         self.cfg = cfg
+        self.use_gouy = use_gouy
         # -- convert from the input units to atomic untis ---------------------
         e0  = initial_field     * (eV_au/nm_au) 
         dw0 = initial_freq_diff * eV_au
@@ -372,7 +373,7 @@ class ElectronModulator(nn.Module):
     def talbot_distance(self): return (4*pi*self.velocity**3*self.gamma**3
                                                         /(self.fr_diff**2))
     def forward(self,alpha):
-        alpha = interaction(self,alpha)
+        alpha = interaction(self,alpha,tracking=False,use_gouy=self.use_gouy)
         alpha = free_propagation(self,alpha)
         return alpha
 
