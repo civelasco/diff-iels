@@ -47,7 +47,7 @@ optimized by gradient descent through the full evolution.
 import torch
 import torch.nn as nn
 import scipy
-import numpy as np
+import math
 from dataclasses import dataclass
 # We use atomic units (electron charge = electron mass = hbar = 1.0) but we 
 # expect the input to be using different system of units
@@ -174,7 +174,7 @@ def interaction(params,alpha,tracking = False,use_gouy = False):
         vfac_m = (1/v-1/c_au)
         vfac_p = (1/v+1/c_au)
         Dvals = (bsum+vfac_m*l1*freq1+vfac_p*l2*freq2
-              +(freq1*l1-freq2*l2)**2/(2*v*gm**3*c_au**2)).to(torch.complex128)
+            +(freq1*l1-freq2*l2)**2/(2*v*gm**3*c_au**2)).to(torch.complex128)
         M = torch.diag(Dvals.reshape(L*L))
         M = M + (-a12)          *kron(S[-1], S[-1])
         M = M + (2*b12.conj())  *kron(S[-1], S[ 1])
@@ -209,11 +209,12 @@ def free_propagation(params,alpha):
     Pure phase, applied elementwise (no mixing between sidebands): each 
     alpha[i,j] is multiplied by exp(i * phi_{l1,l2} * distance), where 
     l1 = i - lmax, l2 = j - lmax, and 
-       phi = (l1 w1 + l2 w2)/v + (l1 w1 + l2 w2)^2 / (2 v^3 gamma^3)
-    
-    The quadratic (compression) term is written via the Talbot distance zt as 
-    (2 pi / zt)(...)^2 / dw^2; note zt ~ 1/dw^2, so dw cancels and the term is 
-    independent of the frequency difference.
+       phi = (l1 w1 + l2 w2)^2 / (2 v^3 gamma^3)
+    We calculate the propagation phase as (2 pi/zT)(...)^2/dw^2, where 
+    zT = 4 pi v^3 gamma^3 / dw^2 is the Talbot distance.
+    We compute the propagation in the co-moving frame of the electron since it 
+    removes the ballistic phase which would introduce strong oscillations that 
+    do affect the duration of the compressed pulses.
 
     Parameters
     ----------
@@ -229,7 +230,6 @@ def free_propagation(params,alpha):
        (energy populations are conserved, only relative phases evolve).
     """
 
-
     v     = params.velocity
     freq1 = params.frequency1
     freq2 = params.frequency2
@@ -241,7 +241,7 @@ def free_propagation(params,alpha):
     # Think about the propagation for the entire spectrum
     l     = torch.arange(0,L,1)-lmax
     l1,l2 = l[:,None], l[None,:]
-    argument = l1*freq1/v+l2*freq2/v+(2*pi/zt)*(l1*freq1+l2*freq2)**2*dw**-2
+    argument = (2*pi/zt)*(l1*freq1+l2*freq2)**2*dw**-2
     free_prop_mat = torch.exp(1j*argument*dist)
     return free_prop_mat*alpha
 
@@ -288,7 +288,7 @@ class ElectronModulator(nn.Module):
             beta0     = self._init_beta(self.electric,self.kinetic)
             intdist0  = rayleigh0 * (beta0/self.cfg.beta_target)**0.5
         self._beta0_init = float(beta0)
-        self.lmax     = max(5,int(3*beta0))
+        self.lmax     = max(5,math.ceil(3*beta0))
         self.L        = 2*self.lmax + 1
         self.interaction_distance = intdist0
         # taking a linear sampling of the interaction region takes too many 

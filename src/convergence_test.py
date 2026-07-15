@@ -103,7 +103,7 @@ def sweep_test(name, knob_name, knob_values, make_cfg):
 
 if __name__ == "__main__":
     # point density sweep
-    betamax_fixed  = 1e-3
+    betamax_fixed  = 1e-4
     density_values = [4, 8, 16, 32, 64, 128, 256]
     dens_res, dens_delt = sweep_test(
         f"Point density (beta_target = {betamax_fixed:.0e}) fixed",
@@ -112,7 +112,7 @@ if __name__ == "__main__":
 
     # extent sweep
     betamax_values = [1e-1,3e-2,1e-2,3e-3,1e-3,3e-4,1e-4]
-    density_fixed  = 64
+    density_fixed  = 128
     beta_res, beta_delt = sweep_test(
         f"Interaction extent (points_per_rayleigh = {density_fixed}) fixed",
         "beta_target", betamax_values,
@@ -142,5 +142,6 @@ if __name__ == "__main__":
     axn.set_ylabel('number of segments',color = 'C2')
     
     plt.tight_layout()
+    plt.savefig('../plots/convergence test')
     plt.show()
     
