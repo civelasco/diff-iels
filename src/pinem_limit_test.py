@@ -31,11 +31,11 @@ def pinem_limit_test(field=0.3, freq1=1.0, freq2=0.5, na=0.2, verbose=True):
     # -- phase-matched electron energy: v/c = (w1 - w2)/(w1 + w2) -------------
     beta_pm  = (freq1 - freq2) / (freq1 + freq2)
     gamma_pm = 1.0 / np.sqrt(1.0 - beta_pm**2)
-    ke_eV    = (gamma_pm - 1.0) * c_au**2 / eV_au # (gamma-1) m c^2, in eV
-    diff     = freq2 - freq1                      # fr_diff so w2 is as asked
+    ke_eV    = (gamma_pm - 1.0) * c_au**2 / eV_au
+    diff     = freq2 - freq1                      
 
     cfg = Config(frequency1=freq1, numerical_aperture=na,
-                 beta_target=1e-4, points_per_rayleigh=64) 
+                 beta_target=1e-4, points_per_rayleigh=128) 
     m = ElectronModulator(cfg, ke_eV, field, diff, 0.0)
     a0 = torch.zeros((m.L, m.L), dtype=torch.complex128)
     a0[m.lmax, m.lmax] = 1.0
@@ -70,10 +70,9 @@ def pinem_limit_test(field=0.3, freq1=1.0, freq2=0.5, na=0.2, verbose=True):
     if verbose:
         print(f"phase-matched: v/c={ (v/c_au):.4f}  KE={ke_eV/1e3:.2f} keV   "
               f"L={L} lmax={lmax} nseg={len(m.z_mid)}")
-        print(f"b12(0)={b12_0:.3e}  I_env={I_env:.1f}  (pi*zR={np.pi*m.rayleigh_range:.1f})  "
-              f"arg=4*b12*I_env={arg:.4f}")
+        print(f"arg=4*b12*I_env={arg:.4f}")
         print(f"\n  n :   P_anti        J_n(arg)^2")
-        for i in range(max(0, lmax-4), min(L, lmax+5)):
+        for i in range(0, L):
             print(f" {i-lmax:+2d} : {P_anti[i]:.6f}      {jv(i-lmax, arg)**2:.6f}")
         print(f"\nmax|P_anti - J_n^2|      = {err:.2e}   (analytic match)")
         print(f"off-anti-diagonal pop    = {leak_off:.2e}   (reduction valid if << 1)")

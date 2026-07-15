@@ -1,19 +1,27 @@
 """
 Convergence test for the tan-sampled interaction module in physics.py.
   Two parameters rule the interaction convergence
-   1) beta_target -> interaction extent (how far from the laser focus we have
-      to go so that the interaction no longer modifies the electron state)
-   2) points_per_rayleigh -> the number of points per Rayleigh range, i.e. the
+   1) points_per_rayleigh -> the number of points per Rayleigh range, i.e. the
       segment density used
+   2) beta_target -> interaction extent (how far from the laser focus we have
+      to go so that the interaction no longer modifies the electron state)
+  
   They converge to different limits, so we sweep each with the other fixed.
 
   We converge on the degree of coherence (DOC_m), the quantity we actually
   optimize. "Converged" means the objective stops changing as we refine 
   -> we look for a *first plateau* in DOC, not the smallest change.
+
+  NOTE: Because theta_max = arctan(intdist/2z0) is bounded by pi/2 
+  num_segments = 2*theta_max*points_per_rayleigh saturates no matter how small 
+  beta_target gets, while the physical extent keeps growing. The outermost 
+  segments then span a larger dz and become under-resolved, so pushing 
+  beta_target too low makes the results worse rather than better. The extent 
+  sweep should then be read where nseg still grows with beta_target, and treat 
+  the PINEM analytic test as the more robust benchmark for the extent.
 """
 
 import time
-import numpy as np
 import torch
 from physics import (Config, ElectronModulator, interaction,
                      free_propagation, mm_au)
@@ -24,10 +32,10 @@ from metric import degree_of_coherence
 # -----------------------------------------------------------------------------
 freq1_init   = 1.0
 num_apt_init = 0.2
-kinetic_init = 30e3
-field_init   = 0.3
+kinetic_init = 31e3
+field_init   = 0.25
 # phase matched so the interaction is maximized
-diff_init    = freq1_init*(0.5-1.0) 
+diff_init    = freq1_init*0.5 
 order        = 1  # DOC order to converge (the one we optimize)
 
 # reference model: gives lmax for a sanity check and the Talbot distance which
@@ -35,8 +43,9 @@ order        = 1  # DOC order to converge (the one we optimize)
 cfg0 = Config(freq1_init, num_apt_init, 1e-3, 10)
 m0   = ElectronModulator(cfg0, kinetic_init, field_init, diff_init, 0.0)
 print(f"lmax = {m0.lmax}")  # check the number of sidebands is reasonable
-# representative compression distance held fixed for the whole test
-prop_dist_mm = (m0.talbot_distance/6).item() / mm_au
+# representative compression distance near where the DOC_1 is maximized in the 
+# PINEM nonrecoil limit
+prop_dist_mm = 0.073*m0.talbot_distance/(m0._beta0_init*mm_au)
 
 # -----------------------------------------------------------------------------
 # fixed tolerance for convergence (absolute change in DOC_m)
@@ -102,9 +111,36 @@ if __name__ == "__main__":
         make_cfg = lambda k: (betamax_fixed, k))
 
     # extent sweep
-    betamax_values = [1e-1, 3e-2, 1e-2, 3e-3, 1e-3, 3e-4, 1e-4]
+    betamax_values = [1e-1,3e-2,1e-2,3e-3,1e-3,3e-4,1e-4]
     density_fixed  = 64
     beta_res, beta_delt = sweep_test(
         f"Interaction extent (points_per_rayleigh = {density_fixed}) fixed",
         "beta_target", betamax_values,
         make_cfg = lambda bt: (bt, density_fixed))
+
+    import matplotlib.pyplot as plt
+
+    fig, (ax1,ax2) = plt.subplots(1,2,figsize = (10,4))
+
+    d_vals = density_values[1:]
+    ax1.semilogy(d_vals, dens_delt[1:])
+    ax1.axhline(tolerance,ls = ':',c = 'k')
+    ax1.set_xlabel(r'point density per $z_0$')
+    ax1.set_ylabel(r'|$\Delta$ DOC| vs previous')
+    ax1.set_title('Density: successive change (extent fixed)')
+    
+    b_vals = betamax_values
+    ax2.semilogx(b_vals,[r['doc'] for r in beta_res],color = 'C1')
+    ax2.invert_xaxis()
+    ax2.set_xlabel(r'$\beta_{\rm target}$' + '\n' 
+                   + r'(smaller $\to$ longer interaction)')
+    ax2.set_ylabel(r'DOC$_1$')
+    ax2.set_title('Extent: DOC vs window')
+
+    axn = ax2.twinx()
+    axn.semilogy(b_vals,[r['nseg'] for r in beta_res],color = 'C2')
+    axn.set_ylabel('number of segments',color = 'C2')
+    
+    plt.tight_layout()
+    plt.show()
+    

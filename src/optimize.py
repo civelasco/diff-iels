@@ -92,13 +92,14 @@ if __name__ == '__main__':
     print(f'final DOC_1 after optimization: {hist[-1][1]:.3f}')
     print(f'optimum analytical PINEM limit   : {0.34}')
 
+    fig, ax = plt.subplots(1,1,figsize = (4,4))
     doc_hist = np.array([h[1] for h in hist])
-    plt.plot(doc_hist,label = 'optimization')
-    plt.plot([0,steps],[0.34,0.34],color='k',linestyle='--'
+    ax.plot(doc_hist,label = 'optimization')
+    ax.axhline(0.34,color='k',linestyle='--'
             ,label='analytical limit (non-recoil)')
-    plt.legend()
-    plt.ylabel('DOC1')
-    plt.xlabel('training steps')
-    plt.title('single-parameter training run (non-recoil regime)\n' 
+    ax.legend()
+    ax.set_ylabel('DOC1')
+    ax.set_xlabel('training steps')
+    ax.set_title('single-parameter training run (non-recoil regime)\n' 
                 + f'--parameter: free-propagation distance, lr = {lr}--')
     plt.show()

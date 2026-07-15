@@ -15,7 +15,9 @@ numerical aperture of the optical system NA, which fixes the rayleigh range
 (zR), i.e. the distance in which the lasers are focused and their amplitudes 
 are more intense. Besides the amplitude, each gaussian beam has an associated 
 Gouy phase exp(i arctan(z/zR)), which adds a "momentum kick" that also 
-affects the interaction probability between the electron and the lasers.
+affects the interaction probability between the electron and the lasers. 
+Note that for the scheme to work, we must have w2<w1, which is automatically
+enforced by construction in the module.
  
 The electron is characterized by a kinetic energy distribution tightly 
 centered around an average value Ke0, the spread is much smaller than the 
@@ -249,7 +251,7 @@ class ElectronModulator(nn.Module):
                  initial_freq_diff,initial_prop_dist,use_gouy=False):
         # ke0  -> initial guess for the kinetic energy of the electron
         # e0   -> initial guess for the electric field amplitude
-        # dw0  -> initial guess for the frequency difference     
+        # dw0  -> initial guess for the frequency difference
         # d0   -> initial guess for the free-propagation distance
         # the parameters placed here are the ones to be optimized
         super().__init__()
@@ -348,7 +350,11 @@ class ElectronModulator(nn.Module):
     @property
     def electric(self): return self.electric_scale*torch.exp(self.log_electric)
     @property
-    def fr_diff(self): return -self.fr_diff_scale*torch.exp(self.log_fr_diff)
+    def fr_diff(self): 
+        # NOTE: the sign is forced negative here wo that w2 < w1 always.
+        #       this is a physical requirement, if it is not met the phase 
+        #       matching condition v/c = (w1-w2)/(w1+w2) cannot be fulfilled.
+        return -self.fr_diff_scale*torch.exp(self.log_fr_diff)
     @property
     def kinetic(self): return self.kinetic_scale*torch.exp(self.log_kinetic)
     @property
