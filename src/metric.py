@@ -4,7 +4,7 @@ Compression metric for the free-electron pulses. We use the degree of coherence
 coefficients obtained after the interaction and the subsequent free 
 propagation. This quantity is the absolute square value of the Fourier 
 transform of the electron probability density at a frequency m * omega (with m 
-an integer) taken over a single optical period 2pi/omega. In particular, we fix 
+an integer) taken over a single optical period 2pi/omega. By default, we fix 
 omega at the frequency difference omega1 - omega2. For our purposes, this 
 function measures how much the mode of frequency m * omega "sees" the electron 
 as a point particle within an optical period. Simply put, DOC_m = 0 for a broad 
@@ -20,12 +20,12 @@ D_12 = alpha*_{l1',l2'} alpha_{l1,l2}
 
 # %%
 import torch
-import torch.nn as nn
-import torch.nn.functional as F
-from scipy.constants import pi
-from physics import Config,ElectronModulator,interaction
+import scipy.constants
 
-def degree_of_coherence(params,alpha,order=1):
+eV_au = (scipy.constants.physical_constants['electron volt-joule relationship'][0]
+       / scipy.constants.physical_constants['atomic unit of energy'][0] )
+
+def degree_of_coherence(params,alpha,order=1,ref_freq=None):
     """ 
     Our measure of compression, computed through the alpha coefficients 
     obtained after interaction and free propagation.
@@ -38,9 +38,14 @@ def degree_of_coherence(params,alpha,order=1):
            the probability that the electron exchanged l1 = i-lmax photons with
            beam 1 and l2 = j - lmax with beam 2. alpha[lmax,lmax] corresponds 
            to the ZLP. The amplitude is normalized to sum |alpha|**2 = 1.
-    order:  order in which the degree of coherence is calculated, for order=m
-            measures the compression of the pulse against a mode of frequency
-            W*m, with W the frequency difference between w1 and w2. 
+    order: order in which the degree of coherence is calculated, for order=m
+           measures the compression of the pulse against a mode of frequency
+           W*m, with W the reference frequency (see below). 
+    ref_freq: frequency (in eV) of the mode against which compression is 
+              measured, by default it is set to the difference between w1 and 
+              w2. When it differs from the frequency difference, the window of 
+              optimization and the periodicity of the pulse train might be 
+              mismatched.
 
     Returns
     -------
@@ -50,12 +55,15 @@ def degree_of_coherence(params,alpha,order=1):
 
     freq1 = params.frequency1
     freq2 = params.frequency2
-    dfreq = params.fr_diff
     lmax  = params.lmax
+    if ref_freq is None:
+        ref_freq = params.fr_diff
+    else: 
+        ref_freq = ref_freq*eV_au
 
     l = torch.arange(-lmax,lmax+1,1)
     argsinc = ((l[:,None,None,None]-l[None,None,:,None])*freq1
-               +(l[None,:,None,None]-l[None,None,None,:])*freq2)/dfreq
+               +(l[None,:,None,None]-l[None,None,None,:])*freq2)/ref_freq
     d12     = alpha[:,:,None,None]*alpha[None,None,:,:].conj()
     sincm   = torch.sinc(order-argsinc)
     sinc0   = torch.sinc(argsinc)

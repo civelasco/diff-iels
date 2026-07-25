@@ -27,7 +27,7 @@ mm_au = 1/(scipy.constants.physical_constants['atomic unit of length'][0]*1e3)
 nm_au = 1/(scipy.constants.physical_constants['atomic unit of length'][0]*1e9)
 c_au = scipy.constants.physical_constants['inverse fine-structure constant'][0]
 
-def optimize(model, steps, learning_rate, order=1):
+def optimize(model, steps, learning_rate, order=1, ref_freq=None):
     opt = torch.optim.Adam(model.parameters(),lr=learning_rate)
     alpha0 = torch.zeros((model.L,model.L),dtype=torch.complex128)
     alpha0[model.lmax,model.lmax] = 1.0
@@ -35,7 +35,7 @@ def optimize(model, steps, learning_rate, order=1):
     for step in range(steps):
         opt.zero_grad()
         alpha = model(alpha0)
-        doc  = degree_of_coherence(model,alpha,order=order)
+        doc  = degree_of_coherence(model,alpha,order=order,ref_freq=ref_freq)
         loss = 1 - doc
         # we check that the loss does not blow-up
         if not torch.isfinite(loss):
