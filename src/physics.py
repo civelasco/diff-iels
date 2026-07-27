@@ -42,6 +42,14 @@ amplitudes, frequency difference, electron kinetic energy and final
 propagation distance) are trainable parameters, so that temporal compression 
 of the electron pulse in a single optical period 2*pi*c/|w1-w2| can be 
 optimized by gradient descent through the full evolution.  
+
+The four inputs are not optimized directly. Each is carried as a dimensionless
+log-scale with a frozen scale and a frozen width, chosen so that one unit of 
+change produces a comparable change in the loss for all parameters. This 
+matters because the kinetic energy and the frequency difference enter through
+the phase-matching resonance condition some four orders of magnitude smaller
+than the scales on which the field amplitude and propagation distance vary, 
+without the rescaling no single learning rate would work for all four.
 ===============================================================================
 """
 import torch
@@ -265,8 +273,10 @@ class ElectronModulator(nn.Module):
         self.frequency1 = self.cfg.frequency1*eV_au
         # -- trainable parameters  --------------------------------------------
         # the parameters in atomic units are very different in magnitude, so 
-        # we use the inputs as a frozen scale and optimize a quantity in log 
-        # scale, that remians O(1) with reasonable learning rates.
+        # we use the inputs as a frozen scale and optimize in log scale.  
+        # That fixes the magnitude but not the curvature of the loss function
+        # (see the width buffers below), which rescale each latent by the range
+        # over which the loss actually varies.
         # we are missing our fourth trainable parameter: the free-propagation 
         # distance, which we introduce later after defining a few quantities
         self.register_buffer('electric_scale'
@@ -275,6 +285,9 @@ class ElectronModulator(nn.Module):
                              ,torch.as_tensor(abs(dw0),dtype=torch.float64))
         self.register_buffer('kinetic_scale'
                              ,torch.as_tensor(ke0,dtype=torch.float64))
+        for name in ('electric', 'fr_diff', 'kinetic', 'distance'):
+            self.register_buffer(f'{name}_width',
+                                 torch.ones((),dtype=torch.float64))
         
         self.log_electric = nn.Parameter(torch.zeros((),dtype=torch.float64))
         self.log_fr_diff  = nn.Parameter(torch.zeros((),dtype=torch.float64))
@@ -287,8 +300,22 @@ class ElectronModulator(nn.Module):
             rayleigh0 = self._init_rayleigh()
             beta0     = self._init_beta(self.electric,self.kinetic)
             intdist0  = rayleigh0 * (beta0/self.cfg.beta_target)**0.5
+            # -- conditioning widths (FROZEN) ---------------------------------
+            # kinetic and fr_diff enter through the phase-matching condition,
+            # v/c = (w1-w2)/(w1+w2), which holds only to within the inverse of
+            # the beat phase accumulated over the interaction region. Their 
+            # log-scale values are therefore rescaled so that one unit of change
+            # in the log scale corresponds to one resonance width, allowing us to
+            # use a single learning rate for all four parameters.
+            v,gm     = self.velocity, self.gamma
+            beta_rel = self.velocity/c_au
+            leff = torch.minimum(torch.as_tensor(pi*rayleigh0),intdist0)
+            dlnv = self.kinetic/(gm**3 * v**2)
+            pm_width = pi*self.velocity/(self.fr_diff.abs()*leff)
+            self.kinetic_width.fill_((pm_width/dlnv).item())
+            self.fr_diff_width.fill_((pm_width/(1+beta_rel)).item())
         self._beta0_init = float(beta0)
-        self.lmax     = max(5,math.ceil(3*beta0))
+        self.lmax     = max(5,math.ceil(4*beta0))
         self.L        = 2*self.lmax + 1
         self.interaction_distance = intdist0
         # taking a linear sampling of the interaction region takes too many 
@@ -354,9 +381,12 @@ class ElectronModulator(nn.Module):
         # NOTE: the sign is forced negative here wo that w2 < w1 always.
         #       this is a physical requirement, if it is not met the phase 
         #       matching condition v/c = (w1-w2)/(w1+w2) cannot be fulfilled.
-        return -self.fr_diff_scale*torch.exp(self.log_fr_diff)
+        return (-self.fr_diff_scale
+                *torch.exp(self.fr_diff_width*self.log_fr_diff))
     @property
-    def kinetic(self): return self.kinetic_scale*torch.exp(self.log_kinetic)
+    def kinetic(self): 
+        return (self.kinetic_scale
+                *torch.exp(self.kinetic_width*self.log_kinetic))
     @property
     def distance(self): return self.distance_scale*torch.exp(self.log_distance)
     # - live derived quantities (smoot functions of params, admit gradient) ---

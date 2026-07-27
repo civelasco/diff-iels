@@ -3,8 +3,9 @@ Finite-difference validation of autograd gradients for ElectronModulator
 
 Here we compare the gradient obtained by loss.backward() vs a finite-difference 
 scheme obtained by slightly varying the trainable parameters. We want to check 
-that everything works for the log-scale trainable parameters, which were 
-introduced while building the optimizer. 
+that everything works for the dimensionless los-scale trainable parameters, which 
+carry both a frozen scale (fixing the magnitude) and a frozen width (fixing the 
+curvature), see physics.py.
 
 NOTE: consider when choosing eps that the error is not monotonic in this 
       quantity, and picking eps badly makes a correct gradient look broken. 
@@ -15,10 +16,11 @@ NOTE: consider when choosing eps that the error is not monotonic in this
          numbers (grows as 1/eps)
       The sum of these two errors should give a U-shaped curve in log-log, with
       straight line slopes of +2 and -1 on either side of the minimum. 
-      The minima are, in general, not the same for each trainable parameter, 
-      depending significantly on how these parameters enter into the forward 
-      pass. Because of this, we add the option to input a dictionary of eps, 
-      allowing to have different values for the different parameters.
+      The position of the minima depend on how strongly the loss cuves with respect
+      to each parameter. The width normalization in physics.py removes most of the 
+      spread that is present in a naive log parametrization, so a single eps should 
+      be good enough for all parameters. The dictionary option is kept as a fallback
+      and for diagnostic purposes.
 """
 import torch
 from metric import degree_of_coherence
