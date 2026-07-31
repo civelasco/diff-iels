@@ -92,7 +92,7 @@ def optimize(model, steps, learning_rate, order=1, ref_freq=None, alpha_int=None
         if stale:
             raise ValueError(
                 f"alpha_int was precomputed but {sorted(stale)} require grad; "
-                "the interaction would be stale. Pass alpha_int=None.")
+                 "the interaction would be stale. Pass alpha_int=None.")
     opt = torch.optim.Adam(model.parameters(),lr=learning_rate)
     alpha0 = torch.zeros((model.L,model.L),dtype=torch.complex128)
     alpha0[model.lmax,model.lmax] = 1.0
@@ -212,7 +212,7 @@ def profile_distance(model, alpha0, n_z=400, order=1, ref_freq=None,
         return out, z/mm_au, docs
     return out
 
-def scan_latent(model, alpha0, name, values, order=1, ref_freq=None):
+def scan_latent(model, alpha0, name, values, order=1, ref_freq=None,n_z=400):
     """
     Map DOC_order along one latent coordinate, with the free-propagation
     distance profiled out at every point.
@@ -276,20 +276,20 @@ def scan_latent(model, alpha0, name, values, order=1, ref_freq=None):
     conv = _UNITS[name][1]
     rows = []
     x0 = p.item()
-    try:
-        with torch.no_grad():
+    with torch.no_grad():
+        try:
             for v in values:
                 p.fill_(float(v))
                 pr = profile_distance(model, alpha0, n_z=n_z, order=order,
-                                      ref_freq=ref_freq)
+                                        ref_freq=ref_freq)
                 rows.append((float(v),
-                             getattr(model, phys).item()/conv,
-                             pr.doc.item(),
-                             pr.distance.item(),
-                             pr.talbot_fraction.item(),
-                             pr.leak))
-    finally:
-        p.fill_(x0)
+                                getattr(model, phys).item()/conv,
+                                pr.doc.item(),
+                                pr.distance.item(),
+                                pr.talbot_fraction.item(),
+                                pr.leak))
+        finally:
+            p.fill_(x0)
     return rows
 
 

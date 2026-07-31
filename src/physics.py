@@ -315,7 +315,7 @@ class ElectronModulator(nn.Module):
             self.kinetic_width.fill_((pm_width/dlnv).item())
             self.fr_diff_width.fill_((pm_width/(1+beta_rel)).item())
         self._beta0_init = float(beta0)
-        self.lmax     = max(5,math.ceil(4*beta0))
+        self.lmax     = max(5,math.ceil(6*beta0))
         self.L        = 2*self.lmax + 1
         self.interaction_distance = intdist0
         # taking a linear sampling of the interaction region takes too many 
