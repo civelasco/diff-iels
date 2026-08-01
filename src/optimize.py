@@ -34,11 +34,13 @@ Two complementary routines are provided:
     max_z DOC_1, a function only of the interaction parameters alone.
 """
 
+from xml.parsers.expat import model
+
 import torch
 import scipy
 import warnings
 from collections import namedtuple
-from metric import degree_of_coherence
+from metric import degree_of_coherence,sinc_kernels
 from physics import interaction, free_propagation
 
 pi    = scipy.constants.pi
@@ -53,8 +55,22 @@ _UNITS = {'log_electric': ('eV/nm', eV_au/nm_au),
           'log_distance': ('mm', mm_au)}
 Profile = namedtuple('Profile', 'doc distance talbot_fraction leak')
 
+def _drift_phase(model):
+    """
+    Phase acquired by each sideband per unit Talbot fraction: the drift phase
+    at z = f*zT is _drift_phase(model)*f.
+
+    zT cancels in this parameterization, so the phase depends only on the
+    frequency ratio -- at fixed Talbot fraction the drift is independent of the
+    kinetic energy.
+    """
+    l = torch.arange(model.L, dtype=torch.float64) - model.lmax
+    w = l[:, None]*model.frequency1 + l[None, :]*model.frequency2
+    return 2*pi*w**2/model.fr_diff**2
+
 # ------------------- gradient-based optimization -----------------------------
-def optimize(model, steps, learning_rate, order=1, ref_freq=None, alpha_int=None):
+def optimize(model, steps, learning_rate, order=1, ref_freq=None,
+             alpha_int=None, profile=False, n_z=400,span=0.5):
     """
     Gradient descent on the trainable parameters, minimizing L = 1 - DOC_order.
 
@@ -79,6 +95,14 @@ def optimize(model, steps, learning_rate, order=1, ref_freq=None, alpha_int=None
                is not recomputed identically at every step. Raises if an
                interaction parameter does require grad, since the comb would
                then be stale.
+    profile: bool -> if True the distance is maximized by scanning one 
+             period of the Talbot range, otherwise it is optimized with 
+             the Adam optimizer, the same as the other parameters. The sweep
+             optimization is done under no_grad
+    n_z: int -> number of points used in the scanning optimization
+    span: float -> fraction of zT that the sweep utilizes, note that DOC_m is 
+          usually periodic in zT/2 (as long as the energy matrix is dominantly
+          populated in the antidiagonal), so by default it is set as 0.5 
 
     Returns
     -------
@@ -93,35 +117,61 @@ def optimize(model, steps, learning_rate, order=1, ref_freq=None, alpha_int=None
             raise ValueError(
                 f"alpha_int was precomputed but {sorted(stale)} require grad; "
                  "the interaction would be stale. Pass alpha_int=None.")
+    if profile and model.log_distance.requires_grad:
+        raise ValueError("profile=True maximizes over the distance directly; "
+                         "freeze log_distance before calling.")
+    
     opt = torch.optim.Adam(model.parameters(),lr=learning_rate)
     alpha0 = torch.zeros((model.L,model.L),dtype=torch.complex128)
     alpha0[model.lmax,model.lmax] = 1.0
     history = []
     for step in range(steps):
         opt.zero_grad()
-        alpha = (free_propagation(model,alpha_int) if alpha_int 
-                 is not None else model(alpha0))
-        doc  = degree_of_coherence(model,alpha,order=order,ref_freq=ref_freq)
+        comb = (alpha_int if alpha_int is not None
+                else interaction(model, alpha0, use_gouy=model.use_gouy))
+        if profile:
+            psi  = _drift_phase(model)
+            frac = span*torch.arange(n_z, dtype=torch.float64)/n_z
+            with torch.no_grad():                    # locate maximizer, no graph
+                kern = sinc_kernels(model, order=order, ref_freq=ref_freq)
+                k = int(torch.argmax(torch.stack([
+                    degree_of_coherence(model, comb*torch.exp(1j*psi*f),
+                                        order=order, ref_freq=ref_freq,
+                                        kernels=kern)
+                    for f in frac])))
+            
+            # NOTE: the call below deliberately omits kernels=kern. kern is
+            # detached (built under no_grad), and the kernels depend on
+            # log_fr_diff through freq2 -- reusing them here would drop that
+            # gradient. Rebuilding once is cheap next to the n_z sweep.
+            alpha   = comb*torch.exp(1j*psi*frac[k])  # single eval, with graph
+            dist_mm = (frac[k]*model.talbot_distance).item()/mm_au
+        else:
+            alpha   = free_propagation(model, comb)
+            dist_mm = model.distance.item()/mm_au
+        doc  = degree_of_coherence(model, alpha, order=order, ref_freq=ref_freq)
         loss = 1 - doc
         # we check that the loss does not blow-up
         if not torch.isfinite(loss):
             raise RuntimeError(f"non-finite loss at step {step}")
         loss.backward()
-        opt.step()
         with torch.no_grad():
-            leak = model.edge_leakage(alpha)
+            leak = float(model.edge_leakage(alpha))
+            row = (loss.item(), doc.item(), leak,
+                   model.electric.item()*nm_au/eV_au,
+                   model.kinetic.item()/eV_au,
+                   model.fr_diff.item()/eV_au,
+                   dist_mm)
+        opt.step()
         if leak > 1e-2:
-            warnings.warn(f"edge leakage {leak:.1e} at step {step:.1e}")
-        history.append((loss.item(), doc.item(), leak
-                        ,model.electric.item()*nm_au/eV_au
-                        ,model.kinetic.item()/eV_au
-                        ,model.fr_diff.item()/eV_au
-                        ,model.distance.item()/mm_au))
+            warnings.warn(f"edge leakage {leak:.1e} at step {step}")
+        history.append(row)
+
     return history
 
 # ------------------- grid-based profiling and scans --------------------------
-def profile_distance(model, alpha0, n_z=400, order=1, ref_freq=None,
-                     alpha_int=None, return_curve=False):
+def profile_distance(model, alpha0, n_z=400, order=1, ref_freq=None, 
+                     alpha_int=None, return_curve=False, span=0.5):
     """
     Profile out the free-propagation distance: for the current interaction
     parameters, find the drift distance maximizing DOC_order.
@@ -142,8 +192,8 @@ def profile_distance(model, alpha0, n_z=400, order=1, ref_freq=None,
            Talbot distance and the frozen grid (lmax, L).
     alpha0: (L,L) complex128 tensor -> initial sideband amplitudes, normally
             the ZLP alpha0[lmax,lmax] = 1. Ignored if alpha_int is given.
-    n_z: int -> number of trial distances, spanning [0,zT) uniformly. The grid
-         spacing zT/n_z sets the resolution of the returned distance.
+    n_z: int -> number of trial distances, spanning [0,zT)*span uniformly. The
+         grid spacing zT/n_z sets the resolution of the returned distance.
     order: int -> order m of the degree of coherence (see metric.py).
     ref_freq: float or None -> probe frequency in eV, passed through to
               degree_of_coherence. None uses the model's own frequency
@@ -155,6 +205,9 @@ def profile_distance(model, alpha0, n_z=400, order=1, ref_freq=None,
     return_curve: bool -> if True, also return the full sweep, so the profile
                   can be plotted rather than only its maximum. This changes the
                   return arity, see below.
+    span: float -> fraction of zT that the sweep utilizes, note that DOC_m is 
+          usually periodic in zT/2 (as long as the energy matrix is dominantly
+          populated in the antidiagonal), so by default it is set as 0.5 
 
     Returns
     -------
@@ -183,22 +236,18 @@ def profile_distance(model, alpha0, n_z=400, order=1, ref_freq=None,
     """
 
     if alpha_int is None:
-        alpha_int = interaction(model, alpha0)
+        alpha_int = interaction(model, alpha0,use_gouy=model.use_gouy)
 
-    lmax, L = model.lmax, model.L
-    l   = torch.arange(L, dtype=torch.float64) - lmax
-    w   = l[:, None]*model.frequency1 + l[None, :]*model.frequency2
-    zt  = model.talbot_distance
-    phi = (2*pi/zt) * w**2 / model.fr_diff**2
-
-    # everything from here to the return is in ATOMIC units
-    z = torch.linspace(0., 1., n_z+1, dtype=torch.float64)[:-1] * zt
-
+    psi  = _drift_phase(model)
+    zt   = model.talbot_distance
+    frac = span*torch.arange(n_z, dtype=torch.float64)/n_z
+    kern = sinc_kernels(model, order=order, ref_freq=ref_freq)
     docs = torch.stack([
-        degree_of_coherence(model, alpha_int*torch.exp(1j*phi*zi),
-                            order=order, ref_freq=ref_freq)
-        for zi in z])
+        degree_of_coherence(model, alpha_int*torch.exp(1j*psi*f),
+                            order=order, ref_freq=ref_freq, kernels=kern)
+        for f in frac])
     k = int(torch.argmax(docs))
+    z = frac * zt
 
     # free propagation is a pure phase, so |alpha| -- and the edge population
     # -- is the same at every trial distance: evaluate the leak once
@@ -212,7 +261,8 @@ def profile_distance(model, alpha0, n_z=400, order=1, ref_freq=None,
         return out, z/mm_au, docs
     return out
 
-def scan_latent(model, alpha0, name, values, order=1, ref_freq=None,n_z=400):
+def scan_latent(model, alpha0, name, values, order=1, ref_freq=None,n_z=400
+                ,span=0.5):
     """
     Map DOC_order along one latent coordinate, with the free-propagation
     distance profiled out at every point.
@@ -245,6 +295,8 @@ def scan_latent(model, alpha0, name, values, order=1, ref_freq=None,n_z=400):
               profile_distance.
     n_z: int -> number of trial distances per point, passed to
          profile_distance.
+    span: float -> fraction of zT utilized by the distance sweep passed to 
+          profile_distance 
 
     Returns
     -------
@@ -281,7 +333,7 @@ def scan_latent(model, alpha0, name, values, order=1, ref_freq=None,n_z=400):
             for v in values:
                 p.fill_(float(v))
                 pr = profile_distance(model, alpha0, n_z=n_z, order=order,
-                                        ref_freq=ref_freq)
+                                        ref_freq=ref_freq,span=span)
                 rows.append((float(v),
                                 getattr(model, phys).item()/conv,
                                 pr.doc.item(),
@@ -298,6 +350,18 @@ def scan_latent(model, alpha0, name, values, order=1, ref_freq=None,n_z=400):
 We try out the optimizer by taking the free-propagation distance as the one 
 parameter to optimize. We contrast the obtained result of the DOC_1 with the 
 analytical PINEM maximum of DOC_1 ~ 0.34.
+
+NOTE: unlike the rest of the project, the model here is built with
+      use_gouy = False. This is deliberate rather than an oversight: the 0.34
+      reference is the non-recoil PINEM limit, and it is the Gouy phase acting
+      together with recoil that allows that limit to be exceeded. Switching it
+      off is what makes the comparison below the right one to draw.
+NOTE: The two distances printed below need not agree. In this configuration the
+      drift landscape has four near-degenerate maxima within one Talbot period
+      (DOC_1 spread ~4e-4, separated by ~50 mm), so descent and the sweep can
+      settle in different basins at essentially the same compression. It is the
+      DOC_1 values that are compared, and only in the direction the sweep can
+      guarantee.
 """
 if __name__ == '__main__':
     from physics import Config,ElectronModulator
@@ -312,25 +376,43 @@ if __name__ == '__main__':
     freq_dif = -0.5
 
     cfg = Config(freq1,numap,beta_tgt,pts_p_rl)
-    m   = ElectronModulator(cfg,kinetic,field,freq_dif,0.0)
+    m   = ElectronModulator(cfg,kinetic,field,freq_dif,0.0,use_gouy=False)
 
     def freeze_all_but_distance(model):
         for name, p in model.named_parameters():
             p.requires_grad_(name == 'log_distance')
     print(f'zT/zR = {(m.talbot_distance/m.rayleigh_range):.2f} \n',
-        f'lmax  = {m.lmax} \n',
-        f'v/c   = {(m.velocity/c_au):.3f}\n'
-        f'initial value distance: {(m.distance/mm_au):.3f} mm')
+          f'lmax  = {m.lmax} \n',
+          f'v/c   = {(m.velocity/c_au):.3f}\n'
+          f'initial value distance: {(m.distance/mm_au):.3f} mm')
     freeze_all_but_distance(m)
     steps = 150
     lr    = 5e-3
     alpha0 = torch.zeros((m.L,m.L),dtype=torch.complex128)
     alpha0[m.lmax,m.lmax] = 1.0
-    print(f'initial DOC_1 before optimization: {degree_of_coherence(m,m(alpha0),1):.3f}')
 
-    hist = optimize(m,steps,lr,1)
+    # the interaction does not depend on the propagation distance, so with only
+    # log_distance trainable the comb is identical at every step and at every
+    # trial distance: compute it once and hand it to both routines
+    with torch.no_grad():
+        alpha_int = interaction(m, alpha0, use_gouy=m.use_gouy)
+        doc0 = degree_of_coherence(m, free_propagation(m, alpha_int), 1)
+    print(f'initial DOC_1 before optimization: {doc0:.3f}')
+
+    hist = optimize(m,steps,lr,1,alpha_int=alpha_int)
     print(f'final DOC_1 after optimization: {hist[-1][1]:.3f}')
     print(f'optimum analytical PINEM limit   : {0.34}')
+
+    with torch.no_grad():
+        prof = profile_distance(m,alpha0,n_z=200,alpha_int=alpha_int)
+    gap = prof.doc.item() - hist[-1][1]
+    print(f'descent: DOC_1 = {hist[-1][1]:.4f} at d = {hist[-1][6]:.3f} mm')
+    print(f'sweep  : DOC_1 = {prof.doc.item():.4f} at d = {prof.distance.item():.3f} mm')
+    print(f'sweep - descent = {gap:+.4f}  (>= 0 up to the grid resolution)')
+    assert gap > -5e-3, (
+        'the sweep is a global maximum over the same objective and cannot be '
+        'worse than descent: the two paths are not evaluating the same model '
+        '(check use_gouy, ref_freq, and alpha_int staleness)')
 
     fig, ax = plt.subplots(1,1,figsize = (4,4))
     doc_hist = np.array([h[1] for h in hist])

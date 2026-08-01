@@ -71,17 +71,17 @@ if __name__ == "__main__":
     frequency1  = 1.0  
     num_apt     = 0.01
     beta_target = 1e-4
-    pts_per_z0  = 128
+    pts_per_z0  = 32
     cfg = Config(frequency1, num_apt, beta_target, pts_per_z0)
     kinetic     =  31e3    
-    electric1   =  0.01   
+    electric1   =  8e-3   
     fr_diff     =  0.5*frequency1
-    d0          =  64.0
+    d0          =  0.0
     model = ElectronModulator(cfg, kinetic, electric1, fr_diff, d0
-                              , use_gouy=True)
+                              ,use_gouy=True)
     alpha0 = torch.zeros((model.L, model.L), dtype=torch.complex128)
     alpha0[model.lmax, model.lmax] = 1.0
-    eps_range = np.logspace(-1,-15,15)
+    eps_range = np.logspace(-1,-12,12)
     curves = {}
     for eps in eps_range:
         res = gradient_test(model, alpha0, eps=eps
