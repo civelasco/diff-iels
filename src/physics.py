@@ -82,7 +82,7 @@ class Config:
     points_per_rayleigh: int  # number of points used per Rayleigh range
     
 # -----------------------------------------------------------------------------
-def interaction(params,alpha,tracking = False,use_gouy = False):
+def interaction(params,alpha,tracking = False,use_gouy = None):
     """Propagate the electron energy-state amplitudes through the two laser
        beam interaction.
     
@@ -104,6 +104,8 @@ def interaction(params,alpha,tracking = False,use_gouy = False):
     (L, L) complex128 -> if tracking is False (final state)
     (n_segments, L, L) complex128 -> if tracking True (per-segment trajectory)
     """
+    if use_gouy is None:
+        use_gouy = params.use_gouy
 
     v  = params.velocity
     gm = params.gamma
@@ -315,7 +317,7 @@ class ElectronModulator(nn.Module):
             self.kinetic_width.fill_((pm_width/dlnv).item())
             self.fr_diff_width.fill_((pm_width/(1+beta_rel)).item())
         self._beta0_init = float(beta0)
-        self.lmax     = max(5,math.ceil(6*beta0))
+        self.lmax     = max(5,math.ceil(7*beta0))
         self.L        = 2*self.lmax + 1
         self.interaction_distance = intdist0
         # taking a linear sampling of the interaction region takes too many 
