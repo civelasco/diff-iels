@@ -31,8 +31,6 @@ Two complementary routines are provided:
     max_z DOC_1, a function only of the interaction parameters alone.
 """
 
-from xml.parsers.expat import model
-
 import torch
 import scipy
 import warnings

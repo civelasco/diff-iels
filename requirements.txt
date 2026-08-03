@@ -1,6 +1,11 @@
-torch
-numpy
-scipy
-matplotlib
-jupyter
-ipykernel
+# Tested with Python 3.12.13, results in example.ipynb produced with
+# torch 2.13.0, numpy 2.5.1, scipy 1.18.0, matplotlib 3.11.1
+# Core
+torch>=2.0          # matrix_exp with complex128 autograd
+numpy>=1.24
+scipy>=1.10         # constants.physical_constants, special.jv
+
+# Notebook and plotting (not needed to import the modules)
+matplotlib>=3.7
+jupyter>=1.0
+ipykernel>=6.25
