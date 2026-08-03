@@ -210,4 +210,106 @@ Dependencies are `torch`, `numpy`, `scipy`, `matplotlib` and `jupyter`. CPU-only
 PyTorch is sufficient — the simulation is a sequence of small dense matrix
 exponentials in `complex128`, and there is nothing here that benefits from a GPU.
 
+## Quickstart
 
+Run from the repository root, the modules live in `src/`.
+
+```python
+import sys; sys.path.insert(0, 'src')
+
+import torch
+from physics import Config, ElectronModulator, interaction, free_propagation
+from metric import degree_of_coherence
+from optimize import profile_distance
+
+# fixed discretization, frozen at construction (see convergence_test.py)
+cfg = Config(frequency1=1.0,            # hbar*w1 in eV
+             numerical_aperture=0.01,
+             beta_target=1e-4,          # sets the interaction extent
+             points_per_rayleigh=32)    # segment density
+
+# physical parameters -- these are the trainable ones, given as initial guesses
+model = ElectronModulator(cfg,
+                          initial_kinetic=31e3,     # eV
+                          initial_field=8e-3,       # eV/nm
+                          initial_freq_diff=0.5,    # eV
+                          initial_prop_dist=1.0,    # mm
+                          use_gouy=True)
+print(model)
+# ElectronModulator(L=25, segments=99, beta0=1.23, v/c=0.333, intdist/zR=110.7)
+
+# incident electron: no photons exchanged with either beam
+alpha0 = torch.zeros((model.L, model.L), dtype=torch.complex128)
+alpha0[model.lmax, model.lmax] = 1.0
+
+with torch.no_grad():
+    comb = interaction(model, alpha0)                    # ~1 min: the expensive step
+    alpha = free_propagation(model, comb)                # drift by the initial 1 mm
+    print(f"{degree_of_coherence(model, alpha, order=1).item():.4f}")
+# 0.0807  -- 1 mm is nowhere near a revival
+
+# the drift distance does not enter the interaction, so reuse the comb and
+# sweep the distance instead: 200 trial distances for ~1% of one interaction
+with torch.no_grad():
+    prof = profile_distance(model, alpha0, n_z=200, alpha_int=comb)
+print(f"DOC_1 = {prof.doc.item():.4f} at d = {prof.distance.item():.2f} mm")
+# DOC_1 = 0.4046 at d = 85.69 mm
+```
+
+On a laptop CPU the interaction takes about a minute and the 200-point sweep that
+follows it under a second, passing `alpha_int` is what buys that, since
+`profile_distance` otherwise recomputes the interaction itself.
+
+Note the numerical aperture. `NA = 0.01` keeps `zT/zR` small enough that recoil
+remains significant; at `NA = 0.2` the recoil term is negligible and the Gouy
+phase suppresses the modulation almost entirely. The tests in `src/` use the
+wide-aperture setting deliberately, with `use_gouy=False`, to isolate the
+analytic PINEM limit.
+
+For the full workflow (gradient checks, the hybrid optimization, Talbot carpets
+and the landscape scans) see [`example.ipynb`](example.ipynb).
+
+## Repository structure
+
+```
+ponderomotive/
+├── README.md
+├── requirements.txt
+├── example.ipynb          walkthrough: forward pass -> checks -> optimization
+├── plots/                 figures written by the test scripts
+└── src/
+    ├── physics.py         ElectronModulator, interaction, free_propagation
+    ├── metric.py          degree_of_coherence, cacheable sinc kernels
+    ├── optimize.py        optimize, profile_distance, scan_latent
+    ├── gradient_test.py   autograd vs finite differences
+    ├── convergence_test.py   segment density and interaction extent
+    └── pinem_limit_test.py   analytic PINEM limit, Gouy off
+```
+
+**The model.** `physics.py` holds the forward model: `Config` fixes the frozen
+discretization, `ElectronModulator` is the `nn.Module` carrying the four
+trainable parameters, and `interaction` / `free_propagation` are the two
+propagation stages. `metric.py` is the objective. `optimize.py` sits on top of
+both: `optimize` for gradient descent, `profile_distance` for the drift sweep,
+`scan_latent` for mapping the landscape along one parameter.
+
+**The tests** are standalone scripts rather than a `pytest` suite — each prints a
+table and writes a figure to `plots/`. They check different things:
+`gradient_test.py` that the graph is connected and the conditioning widths work,
+`convergence_test.py` that the discretization is refined enough,
+`pinem_limit_test.py` that the propagation reproduces a closed form.
+
+### Running things
+
+The notebook runs from the repository root and inserts `src` on the path itself.
+The test scripts import their neighbours directly and write to `../plots`, so
+they run from inside `src`:
+
+```bash
+jupyter notebook example.ipynb        # from the root
+
+cd src
+python gradient_test.py               # from src/
+python convergence_test.py
+python pinem_limit_test.py
+```
