@@ -547,9 +547,10 @@ repository span a wide range as a result:
 | `convergence_test.py` (NA=0.2, E=0.15) | 21 | 441 | 397 | ~1.4× |
 | stronger coupling, `beta0 ≈ 4` | 79 | 6241 | 399 | ~4000× |
 
-The strong-field regime needed for high `DOC_1` is therefore out of practical
-reach here. The generator is banded — the couplings shift `l1` and `l2` by at
-most two — so a sparse or banded treatment is the natural next step.
+The strong-field regime needed for even higher `DOC_1` is therefore out of 
+practical reach here. The generator is banded — the couplings shift `l1` 
+and `l2` by at most two — so a sparse or banded treatment is the natural next
+step.
 
 **Aperture is constrained by physics, not only cost.** `zT/zR ∝ NA²`, so a wide
 aperture makes recoil negligible and the Gouy phase suppresses the modulation
