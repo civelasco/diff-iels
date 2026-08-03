@@ -13,12 +13,9 @@ Two complementary routines are provided:
     - optimize: performs gradient descent on the trainable parameters of the
     differentiable forward model, Electron modulator, so gradients flow from 
     the loss through the alpha coefficients back to the physical parameters. 
-    - scal_latent: maps the loss along one latent on a grid. This is needed 
-    because the kinetic energy and frequency difference enter through a narrow 
-    phase-matching resonance condition, which makes the landscape along those 
-    directions multi-modal, with maxima spaced by roughly one resonance width.
-    Gradient descent converges to whichever basin it starts in, so a scan is 
-    the only way to see the others.
+    - scal_latent: maps the loss along one latent on a grid. This can be used 
+    to visualize the loss landscape, which might be multimodal and have several
+    local extrema.
     - profile_distance: sweeps the free-propagation distance, which does not 
     enter the interaction, it only multiplies the comb by the quadratic Talbot 
     phase. This means the sweep is nearly free, since the interaction only 
