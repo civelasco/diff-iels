@@ -27,7 +27,7 @@ from physics import Config, ElectronModulator, interaction, c_au, eV_au
 torch.set_grad_enabled(False)
 
 
-def pinem_limit_test(field=0.3, freq1=1.0, freq2=0.5, na=0.2, verbose=True):
+def pinem_limit_test(field=0.15, freq1=1.0, freq2=0.5, na=0.2, verbose=True):
     # -- phase-matched electron energy: v/c = (w1 - w2)/(w1 + w2) -------------
     beta_pm  = (freq1 - freq2) / (freq1 + freq2)
     gamma_pm = 1.0 / np.sqrt(1.0 - beta_pm**2)
@@ -37,6 +37,7 @@ def pinem_limit_test(field=0.3, freq1=1.0, freq2=0.5, na=0.2, verbose=True):
     cfg = Config(frequency1=freq1, numerical_aperture=na,
                  beta_target=1e-4, points_per_rayleigh=128) 
     m = ElectronModulator(cfg, ke_eV, field, diff, 0.0)
+    print(m.lmax)
     a0 = torch.zeros((m.L, m.L), dtype=torch.complex128)
     a0[m.lmax, m.lmax] = 1.0
     out = interaction(m, a0, use_gouy=False)   # Gouy off = pure PINEM
