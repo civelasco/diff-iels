@@ -42,7 +42,6 @@ order        = 1  # DOC order to converge (the one we optimize)
 #                  fixes the periodicity of compression
 cfg0 = Config(freq1_init, num_apt_init, 1e-3, 10)
 m0   = ElectronModulator(cfg0, kinetic_init, field_init, diff_init, 0.0)
-print(f"lmax = {m0.lmax}")  # check the number of sidebands is reasonable
 # representative compression distance near where the DOC_1 is maximized in the 
 # PINEM nonrecoil limit
 prop_dist_mm = 0.073*m0.talbot_distance/(m0._beta0_init*mm_au)
@@ -119,6 +118,9 @@ if __name__ == "__main__":
         make_cfg = lambda bt: (bt, density_fixed))
 
     import matplotlib.pyplot as plt
+    from pathlib import Path
+    PLOTS = Path(__file__).resolve().parent.parent / 'plots'
+    PLOTS.mkdir(exist_ok=True)
 
     fig, (ax1,ax2) = plt.subplots(1,2,figsize = (10,4))
 
@@ -142,6 +144,6 @@ if __name__ == "__main__":
     axn.set_ylabel('number of segments',color = 'C2')
     
     plt.tight_layout()
-    plt.savefig('../plots/convergence test')
+    plt.savefig(PLOTS / 'convergence_test.png')
     plt.show()
     

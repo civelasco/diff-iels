@@ -3,7 +3,7 @@ Finite-difference validation of autograd gradients for ElectronModulator
 
 Here we compare the gradient obtained by loss.backward() vs a finite-difference 
 scheme obtained by slightly varying the trainable parameters. We want to check 
-that everything works for the dimensionless los-scale trainable parameters, which 
+that everything works for the dimensionless log-scale trainable parameters, which 
 carry both a frozen scale (fixing the magnitude) and a frozen width (fixing the 
 curvature), see physics.py.
 
@@ -16,11 +16,23 @@ NOTE: consider when choosing eps that the error is not monotonic in this
          numbers (grows as 1/eps)
       The sum of these two errors should give a U-shaped curve in log-log, with
       straight line slopes of +2 and -1 on either side of the minimum. 
-      The position of the minima depend on how strongly the loss cuves with respect
+      The position of the minima depend on how strongly the loss curves with respect
       to each parameter. The width normalization in physics.py removes most of the 
       spread that is present in a naive log parametrization, so a single eps should 
       be good enough for all parameters. The dictionary option is kept as a fallback
       and for diagnostic purposes.
+
+NOTE: the sweep below is slow. It evaluates the loss 9 times per eps value
+      (one backward pass plus two forward passes per parameter), each of
+      which propagates through all ~99 segments, for 12 values of eps --
+      expect it to run for a couple of hours.
+
+      Only the diagnostic curve needs this. A single-eps check, as called
+      from example.ipynb, costs 9 evaluations total and is the usual way to
+      use this module. If you want the full curve faster, lower
+      pts_per_z0 in the config below: the check compares autograd against
+      finite differences on the *same* discretization, so it validates the
+      graph whether or not the grid is converged.
 """
 import torch
 from metric import degree_of_coherence
@@ -68,6 +80,9 @@ if __name__ == "__main__":
     from physics import Config, ElectronModulator
     import numpy as np
     import matplotlib.pyplot as plt
+    from pathlib import Path
+    PLOTS = Path(__file__).resolve().parent.parent / 'plots'
+    PLOTS.mkdir(exist_ok=True)
     frequency1  = 1.0  
     num_apt     = 0.01
     beta_target = 1e-4
@@ -99,5 +114,5 @@ if __name__ == "__main__":
     ax.invert_xaxis()
     ax.legend()
     plt.tight_layout()
-    plt.savefig('../plots/gradient test')
+    plt.savefig(PLOTS / 'gradient_test.png')
     plt.show()
