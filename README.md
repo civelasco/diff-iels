@@ -1,6 +1,7 @@
 ## ponderomotive
 
-**Differentiable simulation of free-electron modulation by counter-propagating CW laser beams.**
+**Differentiable simulation of free-electron modulation by counter-propagating CW laser beams. 
+PyTorch, end-to-end autodiff through the energy-comb amplitudes to the degree of coherence DOC_m.**
 
 A PyTorch `nn.Module` that propagates an electron incident electron with a well-defined 
 energy through the interaction with two counter-propagating Gaussian beams, which puts 
