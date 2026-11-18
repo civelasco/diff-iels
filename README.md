@@ -1,4 +1,4 @@
-## ponderomotive
+## diff-iels
 
 **Differentiable simulation of free-electron modulation by counter-propagating CW laser beams. 
 PyTorch, end-to-end autodiff through the energy-comb amplitudes to the degree of coherence DOC_m.**
@@ -74,7 +74,7 @@ PINEM limit, `DOC_1≈ 0.34`, recoil effects included in our description allow t
 |---|---|
 | Analytic non-recoil PINEM limit | 0.34 |
 | Initial guess, drift distance optimized | 0.40 |
-| Joint optimizatino of all four parameters | 0.67 |
+| Joint optimization of all four parameters | 0.67 |
 
 `scan_latent` confirms this is a local optimum: `DOC_1` does not improve within a few conditioning
 widths of the converged point along any latent. Higher compression is reachable at stronger coupling,
@@ -193,7 +193,7 @@ over `alpha`, with the `alpha`-independent kernels cacheable across a sweep.
 Requires Python 3.12 or newer.
 
 ```bash
-git clone https://github.com/civelasco/ponderomotive.git
+git clone https://github.com/diff-iels.git
 cd ponderomotive
 python -m venv .venv
 source .venv/bin/activate        # Windows: .venv\Scripts\activate
